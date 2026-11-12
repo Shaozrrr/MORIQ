@@ -19,6 +19,19 @@ import Foundation
 @MainActor final class ConsentExpectation { var revoked = false }
 @main struct Check {
     static func main() async throws {
+        var accumulator = ManagedSpeechAccumulator()
+        func event(_ type: String, _ text: String, _ final: Bool, _ segment: Int) -> ManagedSpeechEvent {
+            ManagedSpeechEvent(type: type, text: text, final: final, segment: segment, message: nil)
+        }
+        precondition(accumulator.accept(event("source", "The", false, 1))?.text == "The")
+        precondition(accumulator.accept(event("source", " meeting", false, 1))?.text == "The meeting")
+        precondition(accumulator.accept(event("translation", "会议", false, 1))?.text == "会议")
+        precondition(accumulator.accept(event("source", "The meeting starts.", true, 1))?.text == "The meeting starts.")
+        precondition(accumulator.accept(event("source", "stale", false, 1)) == nil)
+        precondition(accumulator.accept(event("source", "The", false, 2))?.text == "The")
+        precondition(accumulator.accept(event("translation", "开始", false, 1))?.text == "会议开始")
+        precondition(accumulator.accept(event("translation", "会议开始。", true, 1))?.text == "会议开始。")
+        precondition(accumulator.accept(event("source", "old", false, 1)) == nil)
         let port = CommandLine.arguments[1]
         let stream = try ManagedSpeechStream(endpoint: URL(string:"ws://127.0.0.1:\(port)/v1/speech/stream")!, token: String(repeating:"a",count:32), allowLoopbackForTesting:true)
         let events = try await stream.start(source:"en", target:"zh")

@@ -72,6 +72,8 @@ class ReleaseTests(unittest.TestCase):
    signs=[c for c in calls if c[0]=='codesign' and '--sign' in c]
    self.assertTrue(signs)
    self.assertTrue(any(c[-1].endswith('/SpeechEngine/moriq-speech') for c in signs))
+   for arch in ('arm64','x86_64'):
+    self.assertTrue(any(c[0]=='codesign' and '--verify' in c and '--deep' in c and c[-1].endswith(f'/OfficeSuite/LibreOffice-{arch}.app') for c in calls))
    self.assertTrue(all('--deep' not in c and '--timestamp' in c for c in signs))
    self.assertEqual((contents/'Info.plist').read_bytes(), original_info)
  def test_build_uses_both_architectures_without_signing(self):

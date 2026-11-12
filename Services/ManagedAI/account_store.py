@@ -41,6 +41,14 @@ class AccountStore:
                     account_id TEXT NOT NULL REFERENCES accounts(account_id), day TEXT NOT NULL,
                     requests INTEGER NOT NULL CHECK(requests >= 0), PRIMARY KEY(account_id, day)
                 );
+                CREATE TABLE IF NOT EXISTS speech_limits (
+                    account_id TEXT PRIMARY KEY REFERENCES accounts(account_id),
+                    daily_seconds INTEGER NOT NULL CHECK(daily_seconds > 0)
+                );
+                CREATE TABLE IF NOT EXISTS speech_usage (
+                    account_id TEXT NOT NULL REFERENCES accounts(account_id), day TEXT NOT NULL,
+                    seconds INTEGER NOT NULL CHECK(seconds >= 0), PRIMARY KEY(account_id, day)
+                );
             ''')
     @contextmanager
     def _connection(self):
@@ -63,6 +71,11 @@ class AccountStore:
         if not isinstance(expires_at,(int,float)) or not self.clock() < expires_at <= self.clock() + 90 * 86400: raise ValueError('invalid expiry')
         with self._connection() as db:
             db.execute('INSERT INTO sessions(token_hash,account_id,expires_at) VALUES(?,?,?)', (token_hash,account,expires_at))
+    def put_speech_limit(self, account, daily_seconds):
+        if not isinstance(account,str) or not _ACCOUNT.fullmatch(account): raise ValueError('invalid account ID')
+        if isinstance(daily_seconds,bool) or not isinstance(daily_seconds,int) or not 1 <= daily_seconds <= 86400: raise ValueError('invalid speech limit')
+        with self._connection() as db:
+            db.execute('INSERT INTO speech_limits(account_id,daily_seconds) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET daily_seconds=excluded.daily_seconds',(account,daily_seconds))
     def revoke(self, token_hash):
         if not isinstance(token_hash,str) or not _HASH.fullmatch(token_hash): raise ValueError('invalid token hash')
         with self._connection() as db:
@@ -86,6 +99,23 @@ class AccountStore:
                 if count and count[0] >= account[0]:
                     db.execute('ROLLBACK'); return False
                 db.execute('INSERT INTO daily_usage(account_id,day,requests) VALUES(?,?,1) ON CONFLICT(account_id,day) DO UPDATE SET requests=requests+1',(session.account,day))
+                db.execute('COMMIT'); return True
+            except BaseException:
+                if db.in_transaction: db.execute('ROLLBACK')
+                raise
+    def consume_speech(self, session, seconds):
+        """Atomically reserve input-audio seconds, never money or output tokens."""
+        if not isinstance(session,AccountSession) or isinstance(seconds,bool) or not isinstance(seconds,int) or not 1 <= seconds <= 2: return False
+        now = self.clock()
+        day = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date().isoformat()
+        with self._connection() as db:
+            try:
+                db.execute('BEGIN IMMEDIATE')
+                row = db.execute('SELECT l.daily_seconds FROM speech_limits l JOIN sessions s ON s.account_id=l.account_id WHERE s.account_id=? AND s.token_hash=? AND s.revoked=0 AND s.expires_at>?',(session.account,session.token_hash,now)).fetchone()
+                used = db.execute('SELECT seconds FROM speech_usage WHERE account_id=? AND day=?',(session.account,day)).fetchone()
+                if not row or (used[0] if used else 0) + seconds > row[0]:
+                    db.execute('ROLLBACK'); return False
+                db.execute('INSERT INTO speech_usage(account_id,day,seconds) VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET seconds=seconds+excluded.seconds',(session.account,day,seconds))
                 db.execute('COMMIT'); return True
             except BaseException:
                 if db.in_transaction: db.execute('ROLLBACK')

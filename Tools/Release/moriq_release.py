@@ -143,6 +143,11 @@ def sign(app_path, out, identity, version, build_number):
     for item in required:
         if not item.exists(): raise ReleaseError(f'缺少依赖：{item}')
         require_developer_signature(item)
+    # Office bundles are shipped as resources. Verifying the outer app with
+    # --deep does not reliably inspect their sealed nested Python frameworks.
+    # A valid-looking Developer ID is insufficient when a sealed file is lost.
+    for office in required[-2:]:
+        run(['codesign', '--verify', '--deep', '--strict', office])
     run(['codesign', '--force', '--sign', identity, '--options', 'runtime', '--timestamp',
          '--entitlements', ENTITLEMENTS, dest])
     run(['codesign', '--verify', '--deep', '--strict', '--verbose=2', dest])

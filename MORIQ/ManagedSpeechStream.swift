@@ -9,6 +9,37 @@ struct ManagedSpeechEvent: Decodable, Sendable {
     let message: String?
 }
 
+/// Independently assemble the provider's source and translated streams.
+/// Real AST 2.0 sessions observed incremental text followed by a full final
+/// for each stream. No relationship between the two segment numbers is assumed.
+struct ManagedSpeechAccumulator {
+    private struct Track {
+        var segment = -1
+        var text = ""
+        var finalized = false
+    }
+    private var source = Track()
+    private var translation = Track()
+
+    mutating func accept(_ event: ManagedSpeechEvent) -> (text: String, final: Bool)? {
+        guard (event.type == "source" || event.type == "translation"), let segment = event.segment,
+              segment >= 0, let delta = event.text, let final = event.final else { return nil }
+        if event.type == "source" { return Self.update(&source, segment: segment, delta: delta, final: final) }
+        return Self.update(&translation, segment: segment, delta: delta, final: final)
+    }
+
+    private static func update(_ track: inout Track, segment: Int, delta: String, final: Bool) -> (text: String, final: Bool)? {
+        guard segment >= track.segment else { return nil }
+        if segment > track.segment { track = Track(segment: segment) }
+        guard !track.finalized else { return nil }
+        guard delta.utf8.count <= 16_000,
+              final || track.text.utf8.count + delta.utf8.count <= 16_000 else { return nil }
+        if final { track.text = delta; track.finalized = true }
+        else { track.text.append(delta) }
+        return (track.text, final)
+    }
+}
+
 enum ManagedSpeechError: Error {
     case invalidEndpoint, invalidToken, notStarted, invalidAudio, invalidResponse, connectionClosed
 }

@@ -21,7 +21,7 @@ struct CaptionHistoryEntry: Identifiable {
     @Published private(set) var revision = UUID()
     @Published private(set) var segmentID = UUID()
     @Published var status = "准备中"
-    @Published var mode = "bilingual" { didSet { if mode != oldValue { translated = ""; revision = UUID() } } }
+    @Published var mode = "bilingual" { didSet { if mode != oldValue { if !managedSpeech { translated = "" }; revision = UUID() } } }
     @Published var sourceLanguage = "en-US"
     @Published var fontSize: Double = 23
     @Published var showHistory = false
@@ -31,6 +31,7 @@ struct CaptionHistoryEntry: Identifiable {
     @Published var managedSpeech = false
     @Published private(set) var history: [CaptionHistoryEntry] = []
     private var translatedForOriginal = ""
+    private var managedSourceSegment: Int?
     private var stableTranslationText = ""
     private var lastRecognitionUpdate = Date.distantPast
     private(set) var segmentFinalized = false
@@ -88,6 +89,14 @@ struct CaptionHistoryEntry: Identifiable {
         translated = String(text.suffix(4_000))
         translatedForOriginal = ""
     }
+    func acceptManagedSource(_ text: String, segment: Int, final: Bool) {
+        guard managedSpeech, segment >= 0 else { return }
+        if managedSourceSegment != segment {
+            managedSourceSegment = segment; segmentID = UUID(); segmentFinalized = false
+            original = ""; stableTranslationText = ""; translatedForOriginal = ""
+        }
+        accept(text, final: final)
+    }
     func acceptTranslation(_ text: String, forOriginal source: String) {
         acceptTranslation(text, forOriginal: source, segment: segmentID)
     }
@@ -99,7 +108,7 @@ struct CaptionHistoryEntry: Identifiable {
         translated = text
         translatedForOriginal = source
     }
-    func clearCurrent() { original = ""; translated = ""; translatedForOriginal = ""; stableTranslationText = ""; lastRecognitionUpdate = .distantPast; segmentFinalized = false; segmentID = UUID(); revision = UUID() }
+    func clearCurrent() { original = ""; translated = ""; translatedForOriginal = ""; stableTranslationText = ""; managedSourceSegment = nil; lastRecognitionUpdate = .distantPast; segmentFinalized = false; segmentID = UUID(); revision = UUID() }
     func reset() { clearCurrent(); history.removeAll(); isCapturing = false }
 }
 
@@ -283,15 +292,14 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 sink.setWhisper { [weak bridge] sample in bridge?.append(sample) }
                 managedSpeechEvents = Task { @MainActor [weak self] in
                     do {
+                        var accumulator = ManagedSpeechAccumulator()
                         while let event = try await iterator.next() {
                             guard let self, self.generation == generation, self.recognitionSetupID == setupID, !Task.isCancelled else { return }
-                            // The documented API doesn't specify partial text
-                            // merge semantics or cross-stream segment pairing.
-                            // Display confirmed finals independently until a
-                            // real-service integration establishes those rules.
-                            guard event.final == true, let text = event.text, !text.isEmpty else { continue }
-                            if event.type == "source" { model.accept(text, final: true) }
-                            else if event.type == "translation" { model.acceptManagedTranslation(text) }
+                            // Independent tracks: the provider has not promised
+                            // that original/translation segment IDs correspond.
+                            guard let current = accumulator.accept(event), let segment = event.segment else { continue }
+                            if event.type == "source" { model.acceptManagedSource(current.text, segment: segment, final: current.final) }
+                            else if event.type == "translation" { model.acceptManagedTranslation(current.text) }
                         }
                         guard let self, self.generation == generation, !Task.isCancelled else { return }
                         self.endCapture(); model.status = "语音连接已结束，字幕已停止。"
