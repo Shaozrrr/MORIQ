@@ -1,3 +1,5 @@
+![MORIQ：让想法往前走](assets/moriq-cover.png)
+
 <div align="center">
 
 # MORIQ
