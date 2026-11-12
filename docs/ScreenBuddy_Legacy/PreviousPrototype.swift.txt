@@ -1,0 +1,163 @@
+import AppKit
+import SwiftUI
+import Carbon
+import ScreenCaptureKit
+
+struct CaptureTarget { let pid: pid_t; let capturedAt: Date; var windowID: CGWindowID? = nil }
+protocol ScreenCaptureService { func capture(target: CaptureTarget) async throws -> CGImage }
+enum CaptureError: Error { case permissionDenied, ownProcess, noWindow, ambiguous }
+struct MockScreenCaptureService: ScreenCaptureService {
+    func capture(target: CaptureTarget) async throws -> CGImage { throw CaptureError.noWindow }
+}
+// An isolated spike. Never called automatically; refuses to guess when there is more than one window.
+struct ScreenCaptureKitSpike: ScreenCaptureService {
+    func capture(target: CaptureTarget) async throws -> CGImage {
+        guard CGPreflightScreenCaptureAccess() else { throw CaptureError.permissionDenied }
+        guard target.pid != ProcessInfo.processInfo.processIdentifier else { throw CaptureError.ownProcess }
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        let candidates = content.windows.filter { $0.owningApplication?.processID == target.pid && $0.isOnScreen && $0.frame.width > 1 && $0.frame.height > 1 }
+        guard !candidates.isEmpty else { throw CaptureError.noWindow }
+        let window: SCWindow
+        if let id = target.windowID, let exact = candidates.first(where: { $0.windowID == id }) { window = exact }
+        else if target.windowID != nil { throw CaptureError.noWindow }
+        else if candidates.count == 1 { window = candidates[0] }
+        else { throw CaptureError.ambiguous }
+        let config = SCStreamConfiguration()
+        let center = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        var count: UInt32 = 0
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        CGGetDisplaysWithPoint(center, UInt32(ids.count), &ids, &count)
+        guard count > 0 else { throw CaptureError.noWindow }
+        let display = ids[0]
+        let bounds = CGDisplayBounds(display)
+        let scale = CGFloat(CGDisplayPixelsWide(display)) / bounds.width
+        config.width = max(1, Int(window.frame.width * scale)); config.height = max(1, Int(window.frame.height * scale))
+        return try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: config)
+    }
+}
+protocol SIWCAuthService { func connect() async throws; func disconnect() async throws }
+struct UnavailableSIWCAuthService: SIWCAuthService {
+    enum AuthError: Error { case notImplemented }
+    func connect() async throws { throw AuthError.notImplemented }
+    func disconnect() async throws { throw AuthError.notImplemented }
+}
+
+final class HotkeyManager {
+    private var hotKey: EventHotKeyRef?
+    private var handler: EventHandlerRef?
+    var onPress: (() -> Void)?
+    func register() -> OSStatus {
+        unregister()
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let callback: EventHandlerUPP = { _, _, context in
+            guard let context else { return OSStatus(eventNotHandledErr) }
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(context).takeUnretainedValue()
+            DispatchQueue.main.async { manager.onPress?() }
+            return noErr
+        }
+        let install = InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+        guard install == noErr else { return install }
+        let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x53425544, id: 1), GetApplicationEventTarget(), 0, &hotKey)
+        if status != noErr { unregister() }
+        return status
+    }
+    func unregister() { if let hotKey { UnregisterEventHotKey(hotKey); self.hotKey = nil }; if let handler { RemoveEventHandler(handler); self.handler = nil } }
+    deinit { unregister() }
+}
+final class InputPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+    override func cancelOperation(_ sender: Any?) { orderOut(nil); AppDelegate.shared?.restoreFocus() }
+}
+struct InputView: View {
+    @State private var input = ""
+    @FocusState private var focused: Bool
+    var body: some View {
+        TextField("问问当前屏幕…", text: $input).textFieldStyle(.plain).focused($focused)
+            .padding(.horizontal, 18).frame(width: 290, height: 48)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+            .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.35)))
+            .onAppear { focused = true }
+    }
+}
+struct MenuView: View {
+    let hotkeyStatus: OSStatus
+    let showTest: () -> Void
+    let captureTest: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ScreenBuddy · Sprint 0").font(.headline)
+            Text(hotkeyStatus == noErr ? "快捷键：⌥ Space" : "快捷键注册失败（\(hotkeyStatus)）").font(.caption)
+            Text("AI 连接和截图尚未启用").font(.caption).foregroundStyle(.secondary)
+            Button("测试浮窗", action: showTest)
+            Button("测试前台窗口截图", action: captureTest)
+            Divider()
+            Button("退出") { NSApplication.shared.terminate(nil) }
+        }.padding(16).frame(width: 260)
+    }
+}
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static weak var shared: AppDelegate?
+    private var statusItem: NSStatusItem!
+    private let popover = NSPopover()
+    private let hotkey = HotkeyManager()
+    private var panel: InputPanel!
+    private var previousApp: NSRunningApplication?
+    private(set) var target: CaptureTarget?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.shared = self
+        NSApp.setActivationPolicy(.accessory)
+        panel = InputPanel(contentRect: NSRect(x: 0, y: 0, width: 290, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = NSHostingView(rootView: InputView())
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem.button {
+            if let url = Bundle.main.url(forResource: "menu_bar_black_raster_reference", withExtension: "png"), let image = NSImage(contentsOf: url) {
+                image.size = NSSize(width: 18, height: 18); image.isTemplate = true; button.image = image
+            } else { button.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "ScreenBuddy (temporary)") }
+            button.target = self; button.action = #selector(togglePopover(_:))
+        }
+        hotkey.onPress = { [weak self] in self?.showPanel() }
+        let result = hotkey.register()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: MenuView(hotkeyStatus: result, showTest: { [weak self] in self?.popover.performClose(nil); self?.showPanel() }, captureTest: { [weak self] in self?.testCapture() }))
+    }
+    @objc private func togglePopover(_ sender: Any?) { guard let button = statusItem.button else { return }; if popover.isShown { popover.performClose(sender) } else { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) } }
+    private func showPanel() {
+        let front = NSWorkspace.shared.frontmostApplication
+        if let front, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousApp = front
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            let first = windows.first { entry in
+                (entry[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier && (entry[kCGWindowLayer as String] as? Int) == 0
+            }
+            let id = (first?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+            target = CaptureTarget(pid: front.processIdentifier, capturedAt: Date(), windowID: id)
+        }
+        else { target = nil }
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+        panel.setFrameOrigin(NSPoint(x: frame.midX - 145, y: frame.minY + 20))
+        panel.makeKeyAndOrderFront(nil)
+    }
+    private func testCapture() {
+        popover.performClose(nil)
+        guard let target else { showNotice("请先在目标应用按 ⌥ Space，再从菜单栏选择测试截图。\n没有记录目标时不会捕获其他窗口。") ; return }
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else { showNotice("需要屏幕录制权限。请在系统设置中允许 ScreenBuddy，必要时重新打开应用。") ; return }
+        Task { @MainActor in
+            do {
+                let image = try await ScreenCaptureKitSpike().capture(target: target)
+                self.showNotice("截图测试成功：\(image.width) × \(image.height) 像素。图像仅保存在内存，本次不会上传或写入文件。")
+            } catch { self.showNotice("截图未完成：目标窗口可能已关闭、不可捕获，或无法唯一确定。不会自动切换到其他目标。") }
+        }
+    }
+    private func showNotice(_ message: String) { let alert = NSAlert(); alert.messageText = "ScreenBuddy 截图测试"; alert.informativeText = message; alert.runModal() }
+    func restoreFocus() { previousApp?.activate(options: []) }
+    func applicationWillTerminate(_ notification: Notification) { hotkey.unregister(); panel.orderOut(nil); NSStatusBar.system.removeStatusItem(statusItem) }
+}
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

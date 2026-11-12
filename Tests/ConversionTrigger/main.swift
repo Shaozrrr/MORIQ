@@ -1,0 +1,10 @@
+import AppKit
+precondition(ConversionTrigger.isHeld(.shift, preference: "shift"))
+precondition(!ConversionTrigger.isHeld(.option, preference: "shift"))
+precondition(!ConversionTrigger.isHeld([.option, .shift], preference: "option"))
+precondition(!ConversionTrigger.isHeld([.command, .shift], preference: "shift"))
+precondition(ConversionTrigger.isHeld(.option, preference: "option"))
+precondition(ConversionTrigger.isHeld(.control, preference: "control"))
+precondition(!ConversionTrigger.isHeld(.shift, preference: "control"))
+precondition(ConversionTrigger.isHeld(.shift, preference: "unrecognized"))
+print("PASS: configurable conversion modifiers and safe default")

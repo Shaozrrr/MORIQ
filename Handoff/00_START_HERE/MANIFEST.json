@@ -1,0 +1,217 @@
+[
+  {
+    "file": "06_BRAND/Brand_Guidelines.md",
+    "bytes": 2217,
+    "sha256": "5fc149063ff53142778d6cc1acd2831f8ce067a693adf3a42775a1456485dd02"
+  },
+  {
+    "file": "01_PRODUCT/01_Product_Requirements.md",
+    "bytes": 3973,
+    "sha256": "df0d1314e77aeb93518cbbdd409652098330f28abba5040f21e908ccfd09f10b"
+  },
+  {
+    "file": "05_DELIVERY/01_Implementation_Plan.md",
+    "bytes": 2552,
+    "sha256": "a9147cb2167aa084a82984c45a21beaf11ff75be0d0450cbf935b5b988c237cc"
+  },
+  {
+    "file": "05_DELIVERY/02_Acceptance_Tests.md",
+    "bytes": 3110,
+    "sha256": "6a104859cf8c0452ebde2b05051cb2595ef68abf9dcd3745823085c3f7baf880"
+  },
+  {
+    "file": "07_REFERENCE/Legacy_ScreenBuddy_Spec_SUPERSEDED.md",
+    "bytes": 53438,
+    "sha256": "00e6d4cc5ac9b45bf1e121d05c65efc9fd5e2d80cf75bdb5c5293bcb14c5b6b7"
+  },
+  {
+    "file": "03_FEATURES/05_Screenshot_Translation.md",
+    "bytes": 3960,
+    "sha256": "7d5908cdcdba35c774c4deecfc7a3d85be2558a94fad2a19184a5bcde70e3f18"
+  },
+  {
+    "file": "03_FEATURES/01_Converter.md",
+    "bytes": 3633,
+    "sha256": "2cec3f64733ddb58e59a8d84d10d1acb38a161be708d1ed03c3c01d3a12713b0"
+  },
+  {
+    "file": "03_FEATURES/03_File_Shelf.md",
+    "bytes": 1994,
+    "sha256": "bd01e5df97249a8b688b89c2fd02b5e1d3b62f7e7b593c33cecd9631987f53c3"
+  },
+  {
+    "file": "03_FEATURES/02_AI_Assistant.md",
+    "bytes": 3238,
+    "sha256": "eac305f4baeafb5a109eba8e7877ac98c987a149f473b9341fdaead4f6a853ce"
+  },
+  {
+    "file": "03_FEATURES/04_Clipboard.md",
+    "bytes": 1985,
+    "sha256": "877a55a7da74934963a22f23be0b9305bd17ef0d4f80eb497668f682ae370ff8"
+  },
+  {
+    "file": "00_START_HERE/START_CODEX.txt",
+    "bytes": 851,
+    "sha256": "5d371db392418d7dbe6bfb96f6f048a5d418b717ea5bfd88f57327996dfd2ff1"
+  },
+  {
+    "file": "00_START_HERE/README_FIRST.md",
+    "bytes": 3284,
+    "sha256": "f58de53a97713f886b8107fab3cc42f760ed7666de60341d7d8d0f06a17b7a0a"
+  },
+  {
+    "file": "04_ENGINEERING/01_Architecture_and_Permissions.md",
+    "bytes": 5313,
+    "sha256": "1a4d93a3d6bcab308da7f8b22ecde8ac8edd8ed91b83b94ad0225bbab728aa9f"
+  },
+  {
+    "file": "04_ENGINEERING/02_Data_and_Security.md",
+    "bytes": 2855,
+    "sha256": "9109690f1e101791bd537fb96d9f98f7b517e9bde095d1d51ded2f3142d186f4"
+  },
+  {
+    "file": "02_DESIGN/01_UI_Design_System.md",
+    "bytes": 4075,
+    "sha256": "8ca6ab64fb65c6a91cd0ba4b0fcc4118da4e15df93906a38891ea9b4bffd6c29"
+  },
+  {
+    "file": "02_DESIGN/02_Motion_and_Animation.md",
+    "bytes": 4026,
+    "sha256": "f94a62f7e7ddffeabd006ce570768fb64e6486b0765431a4458d3fefc80508a6"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_32.png",
+    "bytes": 1343,
+    "sha256": "9528967a014b990fc0fea95493c88a85bd9f5efcc1480d6abcb790f4fd2b65f4"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_128.png",
+    "bytes": 8840,
+    "sha256": "60767c2dd87f116ff1115affc7577e300d6df2fa25512edcdbc92694e5c9ff28"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_16.png",
+    "bytes": 359,
+    "sha256": "e12ce7f93a9091114e01387bef027ece9d32f0a281e781e63aa26b3fd7cbe438"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_64.png",
+    "bytes": 3370,
+    "sha256": "e592ca8dde9bded754e905635304e28edbfcf8ffbba5a504bcdff4d8b59388bc"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_256.png",
+    "bytes": 21596,
+    "sha256": "4ff710e20e0a95b87aafa4ebc897cc68ebc74ded79e34c9ad4f96ce3b18b595e"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_18.png",
+    "bytes": 644,
+    "sha256": "e9b687a006d496582875bb051e0c0d936d78ec931cd3f76e8fb3e4c7433d8c47"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_1024.png",
+    "bytes": 56606,
+    "sha256": "c891620bbacfc28a7bbb6db5cfb63bda5ef1775cdbbb69306f7b4ecbd3639b0f"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_22.png",
+    "bytes": 553,
+    "sha256": "ff5875eaf192ae15d7a45be7063a2c99549200d219c7a9027f1109d0db3d5fd9"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_18.png",
+    "bytes": 430,
+    "sha256": "db5f25a884cbe1e3279cbf2c5cbfa4bd8791e1ecb36df381ca3cef9a2452d14f"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_128.png",
+    "bytes": 6324,
+    "sha256": "fed9c3e04b5e46c21857ca3b1978075217492f1481fbca38f23b59c163763d25"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_16.png",
+    "bytes": 518,
+    "sha256": "0c0e119691444fee2c77727453a5130405c7e07d88ad151e42445b0d365e3021"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_512.png",
+    "bytes": 49844,
+    "sha256": "8cd24122701e93df7383f639ebeaf2f0e7a9e3fef6a7bf8abafb9485616179ca"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Wordmark_Transparent.png",
+    "bytes": 152088,
+    "sha256": "9a574a0d7b82582e8d2ccc470647bde1acdfd25fcacf9fa75432d3359e7f3a13"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_32.png",
+    "bytes": 919,
+    "sha256": "83996a227251aacc0aca981de7257fa0bcafab964841d121836ecac91b483c05"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_22.png",
+    "bytes": 845,
+    "sha256": "58b50205f2eb5a1fbb929704d63d42cf97b2ac5ecfb2d34b9c2a63d13052b45b"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_256.png",
+    "bytes": 24829,
+    "sha256": "8672e0e24255a82e1349e01ef292593f79d70c792477a7497d12ff1e4b98bff8"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/MenuBar_Template_64.png",
+    "bytes": 2323,
+    "sha256": "af18e77874d7b93df9b5f59b6db0d89cf45ea873a9a93f16414a7daa0c3689b6"
+  },
+  {
+    "file": "06_BRAND/Exported_Assets/Brand_Mark_Transparent.png",
+    "bytes": 97042,
+    "sha256": "49b3a852477153a2e4e1b4cbd19e4d7a5ee90dfbfd9b10fa9f8d46439cdff3ed"
+  },
+  {
+    "file": "06_BRAND/Original_Approved/Horizontal_Logo_Approved.png",
+    "bytes": 1008529,
+    "sha256": "e97633dd59fdf75fdd1d4093ec85b45021a23e039974062c846046664721c4b0"
+  },
+  {
+    "file": "06_BRAND/Original_Approved/Brand_Reference_Board.png",
+    "bytes": 1103238,
+    "sha256": "acb4978d248eb566027b80dfab2cad7182869ef60bc1715a340378507ee88c59"
+  },
+  {
+    "file": "06_BRAND/Original_Approved/macOS_App_Icon_Approved.png",
+    "bytes": 1169878,
+    "sha256": "3d1654b2aa0e96766495c7ac58ddc53a41581822e3367b035a63c3e1b737a653"
+  },
+  {
+    "file": "06_BRAND/Original_Approved/Dark_Pill_Brand_Approved.png",
+    "bytes": 942273,
+    "sha256": "7e7ca3d42154643593c5a38cf179610303459ab16778c2684e217a781902196a"
+  },
+  {
+    "file": "06_BRAND/Original_Approved/Menu_Bar_Monochrome_Approved.png",
+    "bytes": 990922,
+    "sha256": "2b6a05ced67618f74b4e0c77bd9b30e5f4971b08f8f1a9b0eca619e46130af3a"
+  },
+  {
+    "file": "06_BRAND/Animation/Final_Frame.png",
+    "bytes": 44187,
+    "sha256": "b504e8cb7e33df8e156aa3d94fff9790ea2aa91b9eaf11de2f54d878a5bd544a"
+  },
+  {
+    "file": "06_BRAND/Animation/MORIQ_Brand_Reveal.gif",
+    "bytes": 247200,
+    "sha256": "25b5a5f53e69226e65ad382a738ef79e3c772b5b69f5be2492b9ce7b4b8c5c35"
+  },
+  {
+    "file": "06_BRAND/Animation/MORIQ_Brand_Reveal_30fps.mp4",
+    "bytes": 70961,
+    "sha256": "0155150a96f53cd48bdd4c135c53c9e5fba2fb09f22abfb079a9d52ad839eec7"
+  },
+  {
+    "file": "06_BRAND/Animation/Previous_Approved_Concept.gif",
+    "bytes": 201450,
+    "sha256": "6031455539426a2d4023da49416ecfda7b7c858762862903be4f591fd51d5c1b"
+  }
+]

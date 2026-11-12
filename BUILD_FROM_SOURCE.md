@@ -1,0 +1,32 @@
+# 从源码构建 MORIQ
+
+MORIQ 是 macOS 应用，需要 Xcode、macOS SDK 和 macOS 15 或以上版本。本仓库不包含产品服务器配置或用户凭据。
+
+## 获取构建依赖
+
+`Vendor` 中部分体积较大的预编译运行组件单独分发：下载同一发行版本的 `MORIQ-runtime.tar.gz.part-aa`、`MORIQ-runtime.tar.gz.part-ab` 和 `SHA256SUMS-runtime.txt`，将它们放在同一文件夹，并在终端验证与解压：
+
+```sh
+shasum -a 256 -c SHA256SUMS-runtime.txt
+cat MORIQ-runtime.tar.gz.part-* | tar -xz -C /path/to/MORIQ
+```
+
+最后一行的 `/path/to/MORIQ` 替换为本仓库的本地目录。归档会把 `Vendor/` 中的运行组件放回仓库对应位置；确认文件来源和目标目录后再执行。发行资源尚未公开上传，此步骤目前只是准备说明。
+
+归档包括应用构建所需的办公引擎、媒体引擎、语音引擎、模型和相关许可；更完整的第三方源码、构建/重链接材料需要另外提供，参见发行说明。不同机器及架构的可用性仍需验证。
+
+## 构建
+
+```sh
+xcodebuild -project MORIQ.xcodeproj -scheme MORIQ -configuration Debug build
+```
+
+在本机运行可能需要自行选择开发团队和签名身份。无签名构建可用于编译检查，但不代表可直接安装使用。屏幕录制、系统音频与辅助功能等由 macOS 分别授权。
+
+## 开发态可选工具
+
+原开发机上的 `Tools/pdf2docx`、`Tools/pandoc` 和 `Tools/imageio-ffmpeg` 为本机开发/测试用的预装运行环境，包含机器相关路径或重复二进制，未放入此源码副本。应用代码包含检测这些路径的开发回退逻辑；发行应用使用 `Vendor` 内打包的引擎。若要复现依赖这些工具的开发测试，应另行取得对应上游版本，并核实各自许可和环境，不应把当前副本当作包含全部开发工具的完整归档。
+
+## 在线服务
+
+本地网关仅用于回环测试。产品账号、身份与配额、正式服务地址、语音服务凭据和服务端部署均不随仓库提供；不要把密钥写入客户端或仓库。

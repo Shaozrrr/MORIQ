@@ -1,0 +1,422 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"><style>html,body,#moriq-button-dot,.canvas{margin:0;width:100%;height:100%;overflow:hidden;background:transparent} .canvas{position:relative}.binary-field{position:absolute;inset:0;width:100%;height:100%;opacity:.55;pointer-events:none}@media(prefers-color-scheme:dark){.binary-field{filter:grayscale(1) invert(1);opacity:.58}}</style></head><body><div id="moriq-button-dot"><div class="canvas"><canvas class="binary-field" aria-hidden="true"></canvas></div></div><script>
+/* ascii-shark v3 — "paper & ink" ASCII sea
+ * Visual/animation reference: stackedlol/ascii-sharks (MIT, Copyright (c) 2026 drewdi).
+ * https://github.com/stackedlol/ascii-sharks
+ * Demo: https://x.com/stackedlol/status/2112257760628986188
+ * Full source credit and upstream license: THIRD_PARTY_NOTICES.md.
+ * Pure fillRect + fillText (no canvas vector paths, no gradients), drawn in
+ * device pixels with manually measured text placement, so it renders the same
+ * in Chrome and in minimal V8 engines.
+ * Deterministic: renderAt(tMs) is a pure function of time.
+ */
+(function () {
+  'use strict';
+  var root = document.getElementById('moriq-button-dot');
+  var frameRoot = root.querySelector('.canvas');
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  var Q = new URLSearchParams(location.search);
+  // Embedded backgrounds can bound rendering work without changing the drawing.
+  var EMBED = { fps: 24, dpr: 1, maxWidth: 1024 };
+  var SEED = parseInt(Q.get('seed') || '7', 10) || 7;
+  var CAPTURE = Q.get('capture') === '1';
+  var SHOW_UI = Q.get('ui') !== '0';
+  var DPR = Math.max(1, Math.min(2, parseFloat(Q.get('dpr') || '') || EMBED.dpr || (window.devicePixelRatio || 1)));
+  var FIXED_T = Q.has('t') ? parseFloat(Q.get('t')) : null;
+  var LOOP = 24;
+  var DESIGN_W = 972;
+
+  /* ---- themes: "paper" (the reference look) and "dsh" (deepseek harness) */
+  var THEMES = {
+    paper: {
+      paper: '#fdfdfd',
+      grid: 'rgba(0,0,0,0.032)',
+      dustLight: 'rgba(126,123,117,',
+      dustDark: 'rgba(64,62,58,',
+      family: {
+        neutral: [[237, 237, 233], [206, 206, 203], [175, 174, 173], [158, 157, 157], [141, 140, 140],
+                  [126, 125, 125], [110, 110, 109], [89, 89, 87], [67, 69, 65], [46, 48, 43]],
+        warm:    [[240, 234, 226], [214, 209, 204], [181, 176, 168], [158, 150, 140], [144, 137, 130],
+                  [128, 120, 105], [114, 108, 96], [92, 82, 65], [72, 64, 52], [48, 42, 35]],
+        cool:    [[228, 232, 240], [196, 200, 210], [160, 163, 172], [138, 142, 153], [126, 130, 142],
+                  [110, 115, 128], [92, 97, 112], [74, 79, 94], [58, 63, 78], [42, 47, 60]]
+      },
+      accents: ['#a778bd', '#bd6165', '#4c7855', '#6e6d84', '#8c6849']
+    },
+    dsh: {
+      paper: '#fcfcfe',
+      grid: 'rgba(26,34,74,0.030)',
+      dustLight: 'rgba(108,118,150,',
+      dustDark: 'rgba(48,56,96,',
+      family: {
+        neutral: [[236, 238, 245], [205, 208, 219], [174, 177, 188], [156, 159, 171], [139, 142, 154],
+                  [124, 127, 139], [108, 111, 123], [87, 90, 101], [65, 68, 79], [42, 45, 55]],
+        warm:    [[238, 237, 240], [208, 206, 212], [177, 174, 181], [159, 156, 164], [142, 139, 148],
+                  [127, 124, 133], [111, 108, 117], [90, 87, 96], [68, 65, 74], [45, 42, 51]],
+        cool:    [[230, 234, 250], [198, 205, 238], [165, 174, 220], [143, 153, 202], [128, 140, 194],
+                  [110, 123, 184], [92, 106, 168], [74, 88, 146], [56, 68, 116], [38, 47, 84]]
+      },
+      accents: ['#4d6bfe', '#7b8cff', '#a9b6ff', '#2e3a8c', '#8ea2ff', '#c9d2ff'],
+      weights: { neutral: 0.22, warm: 0.12, cool: 0.66 }
+    }
+  };
+  var THEME_NAME = 'dsh';
+  var THEME = THEMES[THEME_NAME] || THEMES.paper;
+  var PAPER = THEME.paper;
+  var FAMILY = THEME.family;
+  var ACCENTS = THEME.accents;
+  var CREATURE = 'whale';
+  var RAMP = ['@', '#', '8', '%', 'X', 'S', 't'];
+  var DUST_GLYPHS = '.,:;·-|\u0060';
+
+  /* ------------------------------------------------------------- helpers */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function h2(x, y, s) {
+    var n = (x | 0) * 374761393 + (y | 0) * 668265263 + (s | 0) * 1274126177;
+    n = (n ^ (n >>> 13)) * 1274126177;
+    n = n ^ (n >>> 16);
+    return (n >>> 0) / 4294967296;
+  }
+  function h3(x, y, z, s) {
+    var n = (x | 0) * 374761393 + (y | 0) * 668265263 + (z | 0) * 2246822519 + (s | 0) * 3266489917;
+    n = (n ^ (n >>> 13)) * 1274126177;
+    n = (n ^ (n >>> 16)) * 2654435761;
+    return ((n ^ (n >>> 15)) >>> 0) / 4294967296;
+  }
+  function smooth(v) { return v * v * (3 - 2 * v); }
+  function noise2(x, y, s) {
+    var xi = Math.floor(x), yi = Math.floor(y);
+    var u = smooth(x - xi), v = smooth(y - yi);
+    var a = h2(xi, yi, s), b = h2(xi + 1, yi, s), c = h2(xi, yi + 1, s), d = h2(xi + 1, yi + 1, s);
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  }
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function rgbCss(c) { return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; }
+
+  /* --------------------------------------------------------------- state */
+  var W = 0, H = 0, scale = 1, cellW = 8, cellH = 12, cols = 121, rows = 73;
+  var bg = document.createElement('canvas');
+  var fx = root.querySelector('.binary-field');
+  var bctx = bg.getContext('2d');
+  var fctx = fx.getContext('2d');
+  var fontGlyph = '', fontDust = '';
+  var GLYPH = { adv: 6, off: 4 }, DUST = { adv: 4, off: 3 };
+  var measCtx = document.createElement('canvas').getContext('2d');
+  function measure(font) {
+    measCtx.font = font;
+    var m = measCtx.measureText('M');
+    var asc = m.actualBoundingBoxAscent || 0, desc = m.actualBoundingBoxDescent || 0;
+    return { adv: m.width || 8, off: (asc - desc) / 2 };
+  }
+
+  /* --------------------------------------------------------- shark shape */
+  var SHARK_POLY = [
+    [1.00, 0.00], [0.95, 0.055], [0.86, 0.095], [0.74, 0.125], [0.60, 0.15], [0.50, 0.165],
+    [0.52, 0.28], [0.45, 0.48], [0.34, 0.66], [0.24, 0.50], [0.14, 0.24], [0.04, 0.175],
+    [-0.14, 0.155], [-0.28, 0.14], [-0.42, 0.12], [-0.54, 0.10], [-0.64, 0.085],
+    [-0.74, 0.20], [-0.90, 0.36], [-1.08, 0.44], [-1.14, 0.36], [-0.98, 0.18],
+    [-0.86, 0.06],
+    [-1.02, -0.18], [-0.92, -0.34], [-0.74, -0.12], [-0.64, -0.085],
+    [-0.54, -0.10], [-0.42, -0.12], [-0.28, -0.14], [-0.14, -0.16], [0.00, -0.18],
+    [0.16, -0.195], [0.13, -0.245], [0.30, -0.19],
+    [0.44, -0.18], [0.58, -0.155], [0.72, -0.125], [0.85, -0.09], [0.94, -0.04]
+  ];
+  function waveAmp(s) { return 0.010 + 0.085 * Math.pow(clamp(s, 0, 1), 1.7); }
+  function spineY(s, wave) { return waveAmp(s) * Math.sin(2 * Math.PI * 0.9 * s - wave); }
+  /* whale, side view — deepseek's whale on the same skeleton */
+  var WHALE_POLY = [
+    [1.00, 0.02], [0.97, 0.12], [0.92, 0.19], [0.84, 0.235], [0.72, 0.255], [0.58, 0.26],
+    [0.44, 0.25], [0.30, 0.235], [0.18, 0.22],
+    [0.12, 0.30], [0.05, 0.32], [0.00, 0.24],
+    [-0.10, 0.215], [-0.24, 0.185], [-0.38, 0.145], [-0.52, 0.10], [-0.64, 0.075],
+    [-0.72, 0.14], [-0.86, 0.24], [-1.02, 0.30], [-1.10, 0.22],
+    [-0.92, 0.04],
+    [-1.08, -0.20], [-0.94, -0.28], [-0.76, -0.10], [-0.66, -0.09],
+    [-0.54, -0.13], [-0.40, -0.17], [-0.26, -0.20], [-0.12, -0.225],
+    [0.02, -0.235], [0.12, -0.235],
+    [0.22, -0.245], [0.16, -0.44], [0.42, -0.26],
+    [0.56, -0.245], [0.70, -0.23], [0.84, -0.20], [0.94, -0.13]
+  ];
+  var CREATURES = { shark: SHARK_POLY, whale: WHALE_POLY };
+  function sharkOutline(wave) {
+    var poly = CREATURES[CREATURE] || SHARK_POLY;
+    var pts = [];
+    for (var i = 0; i < poly.length; i++) {
+      var x = poly[i][0], y = poly[i][1];
+      pts.push([x, y * 1.06 + spineY((1 - x) / 2, wave)]);
+    }
+    return pts;
+  }
+  function inPoly(px, py, poly) {
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
+  /* ------------------------------------------------------------ schedule */
+  var schedule = [];
+  function swimPos(sw, lt) {
+    var v = sw.speed * scale / (W / DPR || 1);   // design px/s -> fraction of width per s
+    var w = sw.turn, a0 = sw.ang0, dx, dy;
+    if (Math.abs(w) < 1e-4) { dx = Math.cos(a0) * v * lt; dy = Math.sin(a0) * v * lt; }
+    else {
+      dx = (Math.sin(a0 + w * lt) - Math.sin(a0)) / w * v;
+      dy = -(Math.cos(a0 + w * lt) - Math.cos(a0)) / w * v;
+    }
+    return { x: sw.x0 + dx, y: sw.y0 + dy * (W / H), a: a0 + w * lt };
+  }
+  function exitTime(sw) {
+    var t = 0;
+    for (var i = 0; i < 260; i++) {
+      var p = swimPos(sw, t);
+      if (t > 0.8 && (p.x < -0.4 || p.x > 1.4 || p.y < -0.4 || p.y > 1.4)) break;
+      t += 0.1;
+    }
+    return Math.min(t, 13);
+  }
+  function buildSchedule() {
+    var rnd = mulberry32(SEED * 2654435 + 17);
+    var n = 8, list = [];
+    for (var i = 0; i < n; i++) {
+      var t0 = (i + rnd() * 0.8) * (LOOP / n);
+      var edge = Math.floor(rnd() * 4), uu = rnd(), margin = 0.10;
+      var x, y, ang;
+      if (edge === 0) { x = uu; y = -margin; ang = Math.PI * 0.5; }
+      else if (edge === 1) { x = 1 + margin; y = uu; ang = Math.PI; }
+      else if (edge === 2) { x = uu; y = 1 + margin; ang = -Math.PI * 0.5; }
+      else { x = -margin; y = uu; ang = 0; }
+      ang += (rnd() - 0.5) * 1.6;
+      var r = rnd();
+      var wts = THEME.weights || { neutral: 0.43, warm: 0.285, cool: 0.285 };
+      var sw = {
+        t0: t0, x0: x, y0: y, ang0: ang,
+        speed: 52 + rnd() * 46,
+        turn: (rnd() - 0.5) * 0.30,
+        fam: r < wts.neutral ? 'neutral' : (r < wts.neutral + wts.warm ? 'warm' : 'cool'),
+        len: 0.26 + rnd() * 0.12,
+        phase: rnd() * Math.PI * 2,
+        dur: 0
+      };
+      sw.dur = Math.max(2.4, exitTime(sw));
+      list.push(sw);
+    }
+    return list;
+  }
+
+  /* --------------------------------------------------------------- paint */
+  var veilCX = 0.54, veilCY = 0.51, veilR = 250;
+  function veilAt(px, py) {
+    var R = veilR * scale * DPR;
+    var dx = px - veilCX * W, dy = py - veilCY * H;
+    var r2 = (dx * dx + dy * dy) / (R * R);
+    return r2 >= 1 ? 0 : 0.62 * (1 - r2);
+  }
+
+  function resize() {
+    var bounds = frameRoot.getBoundingClientRect();
+    var cssW = Math.max(1, bounds.width);
+    var cssH = Math.max(1, bounds.height);
+    var renderRatio = Math.min(1, (EMBED.maxWidth || cssW) / cssW);
+    scale = clamp(cssW * renderRatio / DESIGN_W, 0.62, 1.55);
+    W = Math.round(cssW * DPR * renderRatio);
+    H = Math.round(cssH * DPR * renderRatio);
+    cellW = 8 * scale * DPR;
+    cellH = 12 * scale * DPR;
+    cols = Math.max(24, Math.ceil(W / cellW));
+    rows = Math.max(24, Math.ceil(H / cellH));
+    bg.width = W; bg.height = H;
+    fx.width = W; fx.height = H;
+    bg.style.width = cssW + 'px'; bg.style.height = cssH + 'px';
+    fx.style.width = cssW + 'px'; fx.style.height = cssH + 'px';
+    fctx.textAlign = 'left';
+    fctx.textBaseline = 'alphabetic';
+    fontGlyph = Math.round(cellH * 0.84) + 'px "Consolas", "Cascadia Mono", ui-monospace, Menlo, monospace';
+    fontDust = Math.round(cellH * 0.62) + 'px "Consolas", "Cascadia Mono", ui-monospace, monospace';
+    GLYPH = measure(fontGlyph);
+    DUST = measure(fontDust);
+    schedule = buildSchedule();
+    if (engineState) {
+      engineState.info.cols = cols;
+      engineState.info.rows = rows;
+      engineState.info.cell = cellW;
+    }
+  }
+
+  function drawBackground() {
+    var c = bctx;
+    c.fillStyle = PAPER;
+    c.fillRect(0, 0, W, H);
+    c.fillStyle = THEME.grid;
+    var i, x, y;
+    for (i = 0; i <= cols; i++) { x = Math.round(i * cellW); c.fillRect(x, 0, 1, H); }
+    for (i = 0; i <= rows; i++) { y = Math.round(i * cellH); c.fillRect(0, y, W, 1); }
+  }
+
+  function drawShark(ctx, sw, t) {
+    var local = ((t - sw.t0) % LOOP + LOOP) % LOOP;
+    if (local > sw.dur) return;
+    var p = swimPos(sw, local);
+    var posX = p.x * W, posY = p.y * H, ang = p.a;
+    // Restore the original free-swimming paths. Ease only the beginning and
+    // end of each appearance to avoid an abrupt pop at a loop boundary.
+    var enter = clamp(local / 1.6, 0, 1);
+    var leave = clamp((sw.dur - local) / 1.6, 0, 1);
+    var visibility = smooth(enter) * smooth(leave);
+    var len = sw.len * W;
+    if (len < 40) return;
+
+    var wave = t * 2 * Math.PI / 1.55 + sw.phase;
+    var cos = Math.cos(ang), sin = Math.sin(ang);
+    var sc = len / 2;
+    var outline = sharkOutline(wave);
+    var reach = 1.75 * sc;
+    var x0 = Math.max(0, Math.floor((posX - reach) / cellW));
+    var x1 = Math.min(cols - 1, Math.ceil((posX + reach) / cellW));
+    var y0 = Math.max(0, Math.floor((posY - reach) / cellH));
+    var y1 = Math.min(rows - 1, Math.ceil((posY + reach) / cellH));
+    var bucket = Math.floor(t * 15);
+    var fam = FAMILY[sw.fam];
+    var created = 0;
+
+    for (var gy = y0; gy <= y1; gy++) {
+      for (var gx = x0; gx <= x1; gx++) {
+        var cx = (gx + 0.5) * cellW - posX;
+        var cy = (gy + 0.5) * cellH - posY;
+        var hits = 0;
+        for (var oy = -1; oy <= 1; oy += 2) {
+          for (var ox = -1; ox <= 1; ox += 2) {
+            var sx0 = cx + ox * cellW * 0.25, sy0 = cy + oy * cellH * 0.25;
+            var lx = (sx0 * cos + sy0 * sin) / sc;
+            var ly = (sx0 * sin - sy0 * cos) / sc;   // polygon is y-up, screen y is down
+            if (inPoly(lx, ly, outline)) hits++;
+          }
+        }
+        if (!hits) continue;
+        var cov = hits / 4;
+
+        var nFine = noise2(gx * 1.1, gy * 1.1, SEED + 3);
+        var nMed = noise2(gx * 0.33 + 17, gy * 0.33 + 31, SEED + 9);
+        var ghost = false;
+        if (cov < 0.11 + nFine * 0.26) {
+          if (cov > 0.01 && h3(gx, gy, bucket + 51, SEED + 21) < 0.55) ghost = true;
+          else continue;
+        }
+
+        var ink = clamp(cov * (0.28 + 0.40 * nMed + 0.16 * nFine) +
+                        (h3(gx, gy, bucket + 31, SEED + 12) - 0.5) * 0.24, 0, 1);
+        ink = clamp(ink * 1.22, 0, 1);
+        if (ink < 0.08) continue;
+
+        var ve = veilAt((gx + 0.5) * cellW, (gy + 0.5) * cellH);
+
+        // plate: 225 (faint) -> 70 (near black)
+        var idx = clamp(Math.round((155 * ink - 5) / 20), 0, 9);
+        var plate = fam[idx];
+        var plateL = 220 - 20 * idx;
+        var mixAmt = 0.58 + 0.40 * (1 - plateL / 255);
+        var inkRgb = [
+          Math.round(lerp(plate[0], 255, mixAmt)),
+          Math.round(lerp(plate[1], 255, mixAmt)),
+          Math.round(lerp(plate[2], 255, mixAmt))
+        ];
+        var glyphTone = clamp(ink + (nFine - 0.5) * 0.18, 0, 1);
+        var gi = clamp(Math.floor((1 - glyphTone) * 7 + (h3(gx, gy, bucket, SEED + 5) - 0.5) * 4.8), 0, 6);
+        var ch = RAMP[gi];
+        if (h3(gx, gy, bucket + 91, SEED + 6) < 0.035) {
+          inkRgb = ACCENTS[Math.floor(h3(gx, gy, bucket + 13, SEED + 8) * ACCENTS.length)];
+        }
+
+        var bx = gx * cellW + cellW * 0.0625;
+        var by = gy * cellH + cellH * 0.04167;
+        if (ghost) {
+          ctx.globalAlpha = (1 - ve) * 0.45 * visibility;
+          ctx.fillStyle = rgbCss(plate);
+          ctx.fillRect(bx, by, cellW * 0.875, cellH * 0.9167);
+          ctx.globalAlpha = 1;
+          created++;
+          continue;
+        }
+        ctx.globalAlpha = (1 - ve) * visibility;
+        ctx.fillStyle = rgbCss(plate);
+        ctx.fillRect(bx, by, cellW * 0.875, cellH * 0.9167);
+        ctx.fillStyle = typeof inkRgb === 'string' ? inkRgb : rgbCss(inkRgb);
+        ctx.font = fontGlyph;
+        ctx.fillText(ch, gx * cellW + cellW * 0.5 - GLYPH.adv * 0.5, gy * cellH + cellH * 0.53 + GLYPH.off);
+        created++;
+      }
+    }
+    ctx.globalAlpha = 1;
+    engineState.stats.cells += created;
+    engineState.stats.alive++;
+  }
+
+  function drawDust(ctx, t, count, mul) {
+    for (var i = 0; i < count; i++) {
+      var sx = h2(i, 41, SEED + 7), sy = h2(i, 42, SEED + 7);
+      var loops = 1 + Math.floor(h2(i, 43, SEED) * 3);
+      var x = (((sx + (loops * t) / LOOP) % 1) + 1) % 1 * W;
+      var y = (((sy + (t / LOOP) * 0.4) % 1) + 1) % 1 * H;
+      var ph = h2(i, 44, SEED) * 6.283;
+      var tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.8 + ph));
+      var a = (0.14 + h2(i, 45, SEED) * 0.36) * tw * mul * (1 - veilAt(x, y));
+      if (a < 0.02) continue;
+      var ch = DUST_GLYPHS.charAt(Math.floor(h2(i, 46, SEED + ((t * 1.5) | 0)) * DUST_GLYPHS.length));
+      var dark = h2(i, 47, SEED) < 0.12;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = (dark ? THEME.dustDark : THEME.dustLight) + a.toFixed(3) + ')';
+      ctx.font = fontDust;
+      ctx.fillText(ch, x - DUST.adv * 0.5, y + DUST.off);
+    }
+  }
+
+  function renderAt(ms) {
+    var t = ((ms / 1000) % LOOP + LOOP) % LOOP;
+    var st = engineState.stats;
+    st.alive = 0; st.cells = 0; st.t = t;
+    fctx.clearRect(0, 0, W, H);
+    fctx.textAlign = 'left';
+    fctx.textBaseline = 'alphabetic';
+    var nDust = Math.round(700 * (W * H) / (DESIGN_W * 880 * DPR * DPR));
+    drawDust(fctx, t, Math.round(nDust * 0.55), 0.75);
+    for (var i = 0; i < schedule.length; i++) drawShark(fctx, schedule[i], t);
+    drawDust(fctx, t, Math.round(nDust * 0.45), 1.0);
+    fctx.globalAlpha = 1;
+  }
+
+  var t0 = 0;
+  var lastFrame = -Infinity;
+  var frameInterval = 1000 / (EMBED.fps || 60);
+  function loop(now) {
+    if (!t0) t0 = now;
+    if (!root.isConnected) return;
+    if (root.closest('section[hidden]')) { requestAnimationFrame(loop); return; }
+    if (now - lastFrame >= frameInterval - 0.5) {
+      lastFrame = now;
+      renderAt(now - t0 + 5500);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  var engineState = {info: {}, stats: {alive: 0, cells: 0, t: 0}};
+
+  function boot() {
+    resize(); drawBackground(); renderAt(5500);
+    if (!reducedMotion.matches) requestAnimationFrame(loop);
+  }
+  var observer = new ResizeObserver(function() { resize(); drawBackground(); if (reducedMotion.matches) renderAt(5500); });
+  observer.observe(frameRoot);
+  boot();
+})();
+
+</script></body></html>

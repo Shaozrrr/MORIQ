@@ -1,0 +1,8 @@
+Pandoc 3.13, official upstream binaries (separate command-line process).
+Source and release: https://github.com/jgm/pandoc/releases/tag/3.13
+Corresponding source: https://github.com/jgm/pandoc/tree/3.13
+License: GPL-2.0-or-later; see LICENSE.txt.
+Official archive SHA-256:
+arm64 f436d18bebbfb3ddd326597686dacab9fac5dc23bd060495020f35a28a43a7c3
+x86_64 1823278715aa405aaf21b59cde5dc789346aa8d4fc307467f9a9ee84162bedc5
+Distribution must satisfy applicable source, license and attribution obligations.
