@@ -66,16 +66,6 @@ import Foundation
         let seen = await MainActor.run { expectation.revoked }
         guard seen else { fatalError("consent revocation was not observed") }
         await MainActor.run { monitor.stop() }
-        defaults.set(true, forKey: ManagedSpeechConsentMonitor.key)
-        defaults.set(true, forKey: ManagedSpeechConsentMonitor.microphoneKey)
-        let microphoneExpectation = ConsentExpectation()
-        let microphoneMonitor = await MainActor.run {
-            ManagedSpeechConsentMonitor(defaults: defaults, requiredKeys: [ManagedSpeechConsentMonitor.key, ManagedSpeechConsentMonitor.microphoneKey]) { microphoneExpectation.revoked = true }
-        }
-        defaults.set(false, forKey: ManagedSpeechConsentMonitor.microphoneKey)
-        try await Task.sleep(for: .milliseconds(250))
-        guard await MainActor.run(body: { microphoneExpectation.revoked }) else { fatalError("microphone consent revocation was not observed") }
-        await MainActor.run { microphoneMonitor.stop() }
         defaults.removePersistentDomain(forName: suite)
         print("PASS Swift client → audio conversion → gateway → upstream streaming and finish")
         print("PASS live consent revocation notification")

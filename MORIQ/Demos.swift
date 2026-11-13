@@ -79,7 +79,7 @@ struct DemoView: View {
     }
     private var captions: some View {
         VStack(spacing: 10) {
-            Text("系统声音 · 可切换麦克风").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("电脑声音 · 实时字幕").font(.system(size: 11)).foregroundStyle(.secondary)
             Image(systemName: "play.rectangle.fill").font(.system(size: 50)).foregroundStyle(blue.opacity(0.7))
             Spacer().frame(height: 18)
             VStack(spacing: 5) {

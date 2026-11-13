@@ -28,9 +28,7 @@
 	<string>用于转换和暂存你选择的下载文件。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>用于在你选择麦克风字幕时识别语音。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>用于将你选择的系统声音或麦克风声音转换为字幕。</string>
+	<string>用于将电脑播放的声音转换为字幕。</string>
 </dict>
 </plist>

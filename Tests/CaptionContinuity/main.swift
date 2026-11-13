@@ -12,6 +12,9 @@ MainActor.assumeIsolated {
  precondition(s.translated == "第一句。还有更长的后续。")
  s.accept("First sentence. A longer continuation.", final: true)
  precondition(s.history.count == 1 && s.history[0].translated == s.translated)
+ precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"original") == [s.history[0].original])
+ precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"zh") == [s.history[0].translated])
+ precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"bilingual") == [s.history[0].original,s.history[0].translated])
  let long = String(repeating: "word ", count: 200)
  s.accept(long)
  precondition(s.original.count > 500)
@@ -74,7 +77,7 @@ MainActor.assumeIsolated {
  precondition(s.translationSnapshot.isEmpty)
  let remote = LiveCaptionState(); remote.managedSpeech = true
  precondition(CaptionAudioSource.system.accepts(.audio) && !CaptionAudioSource.system.accepts(.microphone))
- precondition(CaptionAudioSource.microphone.accepts(.microphone) && !CaptionAudioSource.microphone.accepts(.audio))
+ precondition(CaptionAudioSource.allCases == [.system], "captions must not expose microphone capture")
  remote.acceptManagedSource("Hello.", segment: 1, final: true)
  remote.acceptManagedTranslation("你好。")
  remote.acceptManagedSource("Hello.", segment: 2, final: true)

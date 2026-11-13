@@ -4,7 +4,6 @@ import Combine
 import CoreGraphics
 import ApplicationServices
 import ScreenCaptureKit
-import AVFoundation
 import Darwin
 
 enum FolderAccessProbe {
@@ -56,7 +55,6 @@ struct PermissionOnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("moriq.permissionDarkMode") private var dark = false
     @State private var audioGranted = CaptionAudioPermissionProbe.verifiedThisLaunch
-    @State private var microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @State private var audioChecking = false
     @State private var audioAutoCheckStarted = false
     @State private var audioStatus = ""
@@ -80,7 +78,7 @@ struct PermissionOnboardingView: View {
     @State private var permissionWidth: CGFloat = 300
     private let permissionRefresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let blue = Color(red: 37/255, green: 99/255, blue: 1)
-    private var ready: Bool { screenGranted && accessibilityGranted && foldersGranted && !foldersChecking && directCaptureGranted && audioGranted && microphoneGranted && !audioChecking }
+    private var ready: Bool { screenGranted && accessibilityGranted && foldersGranted && !foldersChecking && directCaptureGranted && audioGranted && !audioChecking }
     var body: some View {
         ZStack {
             (dark ? Color.black : Color.white).ignoresSafeArea()
@@ -180,7 +178,6 @@ struct PermissionOnboardingView: View {
                             permissionRow(title: "文件与文件夹", granted: foldersGranted, action: requestFolders)
                             permissionRow(title: "直接屏幕读取", granted: directCaptureGranted, action: requestDirectCapture)
                             permissionRow(title: "系统音频", granted: audioGranted, action: { requestCaptionAudio() })
-                            permissionRow(title: "麦克风", granted: microphoneGranted, action: requestMicrophone)
                         }
                         .onAppear { permissionWidth = geometry.size.width }
                         .onChange(of: geometry.size.width) { _, width in permissionWidth = width }
@@ -235,7 +232,6 @@ struct PermissionOnboardingView: View {
         case "文件与文件夹": return "用于处理桌面、文稿和下载中的文件。"
         case "直接屏幕读取": return "用于读取屏幕，系统可能再次提醒。"
         case "系统音频": return "用于实时字幕，只处理电脑播放的声音。"
-        case "麦克风": return "用于为现场讲话生成字幕，仅在选择麦克风时使用。"
         default: return "点击权限名称，了解用途。"
         }
     }
@@ -259,7 +255,6 @@ struct PermissionOnboardingView: View {
         }
         let screen = CGPreflightScreenCaptureAccess()
         let accessibility = AXIsProcessTrusted()
-        let microphone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if !screen && (audioGranted || CaptionAudioPermissionProbe.previouslyVerified) {
             audioGranted = false; CaptionAudioPermissionProbe.verifiedThisLaunch = false
             CaptionAudioPermissionProbe.previouslyVerified = false; audioAutoCheckStarted = false
@@ -276,20 +271,12 @@ struct PermissionOnboardingView: View {
         }
         if screen { PermissionRelaunch.shared.granted("screen") }
         if accessibility { PermissionRelaunch.shared.granted("accessibility") }
-        guard screen != screenGranted || accessibility != accessibilityGranted || microphone != microphoneGranted else { return }
+        guard screen != screenGranted || accessibility != accessibilityGranted else { return }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
             screenGranted = screen
             accessibilityGranted = accessibility
-            microphoneGranted = microphone
         }
         if screen && !directCaptureGranted && !captureChecking { requestDirectCapture() }
-    }
-    private func requestMicrophone() {
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-            Task { _ = await AVCaptureDevice.requestAccess(for: .audio); refresh() }
-        } else if !microphoneGranted, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
-        }
     }
     private func requestCaptionAudio(automatic: Bool = false) {
         guard CGPreflightScreenCaptureAccess() else { accessMessage = "请先授权屏幕录制，再检查系统音频。"; return }

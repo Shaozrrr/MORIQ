@@ -72,7 +72,6 @@ final class ManagedSpeechAudioBridge: @unchecked Sendable {
 /// Observes revocation from settings during an active or connecting session.
 @MainActor final class ManagedSpeechConsentMonitor {
     static let key = "moriq.managedSpeechConsent"
-    static let microphoneKey = "moriq.managedMicrophoneConsent"
     private let defaults: UserDefaults
     private let requiredKeys: [String]
     private var observer: NSObjectProtocol?

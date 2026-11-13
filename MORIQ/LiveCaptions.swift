@@ -8,30 +8,12 @@ import SwiftUI
 import Translation
 
 enum CaptionAudioSource: String, CaseIterable {
-    case system, microphone
-    var label: String { self == .system ? "系统声音" : "麦克风" }
-    func accepts(_ type: SCStreamOutputType) -> Bool {
-        (self == .system && type == .audio) || (self == .microphone && type == .microphone)
-    }
+    case system
+    var label: String { "系统声音" }
+    func accepts(_ type: SCStreamOutputType) -> Bool { type == .audio }
 }
 
-enum CaptionSessionMode: String, CaseIterable {
-    case captions, interpretation
-    var label: String { self == .captions ? "实时字幕" : "同声传译" }
-    var audioSources: [CaptionAudioSource] { self == .captions ? [.system] : [.system, .microphone] }
-}
-
-@MainActor private final class CaptionTrackModels: ObservableObject {
-    @Published var microphone: LiveCaptionState?
-}
-
-enum CaptionMicrophoneDeviceDecision { case unchanged, changed, unavailable }
-enum CaptionMicrophoneDevicePolicy {
-    static func decide(configured: String, current: String?) -> CaptionMicrophoneDeviceDecision {
-        guard let current, !current.isEmpty else { return .unavailable }
-        return current == configured ? .unchanged : .changed
-    }
-}
+enum CaptionSessionMode: String { case captions }
 
 struct CaptionHistoryEntry: Identifiable {
     let id: UUID
@@ -39,6 +21,15 @@ struct CaptionHistoryEntry: Identifiable {
     let sourceLanguage: String
     let targetLanguage: String
     var translated: String
+}
+
+enum CaptionHistoryVisibility {
+    static func lines(_ item: CaptionHistoryEntry, mode: String) -> [String] {
+        var lines: [String] = []
+        if mode != "zh" { lines.append(item.original) }
+        if mode != "original" && !item.translated.isEmpty { lines.append(item.translated) }
+        return lines
+    }
 }
 
 /// Current subtitle and bounded history exist only in memory for this session.
@@ -296,80 +287,44 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private var generation = UUID(), recognitionID = UUID(), recognitionSetupID = UUID()
     private var panel: NSPanel?
     private var state: LiveCaptionState?
-    private var microphoneCoordinator: LiveCaptionsCoordinator?
-    private var retainedMicrophoneHistory: [CaptionHistoryEntry] = []
-    private var microphoneSourceLanguage = "zh-CN"
-    private var microphoneTargetLanguage = "en-US"
-    private let tracks = CaptionTrackModels()
-    private let presentsPanel: Bool
-    private var sessionMode: CaptionSessionMode = .captions
-    private var onModelChange: ((LiveCaptionState?) -> Void)?
     var onStop: (() -> Void)?
 
-    override convenience init() { self.init(presentsPanel: true) }
-    private init(presentsPanel: Bool) { self.presentsPanel = presentsPanel; super.init() }
-
     /// Called only from a user action.
-    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false, mode: CaptionSessionMode? = nil, targetLanguage: String? = nil) {
-        let selectedMode = mode ?? sessionMode
-        let audioSource: CaptionAudioSource = presentsPanel ? .system : audioSource
+    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false, targetLanguage: String? = nil) {
         if preserveSession, let state, !state.original.isEmpty { state.accept(state.original, final: true) }
-        if presentsPanel && preserveSession { retainMicrophoneHistory() }
-        else if presentsPanel { retainedMicrophoneHistory.removeAll() }
         let savedHistory = preserveSession ? state?.history ?? [] : []
         let savedMode = preserveSession ? state?.mode : nil
         let savedTarget = preserveSession ? state?.targetLanguage : nil
         let savedSize = preserveSession ? state?.fontSize : nil
         let savedFrame = preserveSession ? panel?.frame : nil
         stop(notify: false)
-        sessionMode = selectedMode
         let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.targetLanguage = targetLanguage ?? savedTarget ?? "zh-Hans"; model.audioSource = audioSource; state = model
-        onModelChange?(model)
         model.restoreHistory(savedHistory)
         if let savedMode { model.mode = savedMode }; if let savedSize { model.fontSize = savedSize }
-        if presentsPanel { showPanel(model, frame: savedFrame) }
+        showPanel(model, frame: savedFrame)
         let id = UUID(); generation = id
         setup = Task { @MainActor [weak self] in
             guard let self else { return }
             guard CGPreflightScreenCaptureAccess() else { model.status = "请先授权屏幕与系统音频录制。"; return }
-            if audioSource == .microphone {
-                guard await AVCaptureDevice.requestAccess(for: .audio) else { model.status = "请先在系统设置中允许麦克风访问。"; return }
-                guard !Task.isCancelled, self.generation == id else { return }
-            }
-            let microphoneID: String?
-            if audioSource == .microphone {
-                guard let id = AVCaptureDevice.default(for: .audio)?.uniqueID, !id.isEmpty else {
-                    model.status = "没有可用的麦克风，请检查系统输入设备后重试。"; return
-                }
-                microphoneID = id
-            } else { microphoneID = nil }
             guard await self.installRecognition(language: model.sourceLanguage, generation: id) else { return }
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard !Task.isCancelled, self.generation == id else { return }
                 guard let display = content.displays.first else { throw CaptionFailure.display }
-                let config = SCStreamConfiguration(); config.capturesAudio = audioSource == .system; config.excludesCurrentProcessAudio = true
+                let config = SCStreamConfiguration(); config.capturesAudio = true; config.excludesCurrentProcessAudio = true
                 config.width = 2; config.height = 2; config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
                 if #available(macOS 15.0, *) {
-                    config.captureMicrophone = audioSource == .microphone
-                    if let microphoneID { config.microphoneCaptureDeviceID = microphoneID }
+                    config.captureMicrophone = false
                 }
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let stream = SCStream(filter: filter, configuration: config, delegate: self)
                 self.sink.selectSource(audioSource, stream: stream)
-                try stream.addStreamOutput(self.sink, type: audioSource == .system ? .audio : .microphone, sampleHandlerQueue: DispatchQueue(label: "local.moriq.captions.audio", qos: .userInitiated))
+                try stream.addStreamOutput(self.sink, type: .audio, sampleHandlerQueue: DispatchQueue(label: "local.moriq.captions.audio", qos: .userInitiated))
                 self.stream = stream
                 try await stream.startCapture()
                 guard !Task.isCancelled, self.generation == id else { try? await stream.stopCapture(); return }
                 model.isCapturing = true
                 model.status = model.managedSpeech ? "正在向语音服务发送\(audioSource.label)" : "正在聆听\(audioSource.label)"
-                if self.presentsPanel && selectedMode.audioSources.contains(.microphone) {
-                    let child = LiveCaptionsCoordinator(presentsPanel: false)
-                    child.onModelChange = { [weak self] model in self?.tracks.microphone = model }
-                    self.microphoneCoordinator = child
-                    child.start(sourceLanguage: self.microphoneSourceLanguage, audioSource: .microphone, targetLanguage: self.microphoneTargetLanguage)
-                    child.state?.restoreHistory(self.retainedMicrophoneHistory)
-                }
                 self.renewal = Task { @MainActor [weak self] in
                     var elapsed = 0
                     while !Task.isCancelled {
@@ -378,18 +333,6 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                         guard CGPreflightScreenCaptureAccess() else {
                             CaptionAudioPermissionProbe.verifiedThisLaunch = false; CaptionAudioPermissionProbe.previouslyVerified = false
                             self.endCapture(); model.status = "屏幕与系统音频权限已撤销，字幕已停止。"; return
-                        }
-                        if audioSource == .microphone && AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                            self.endCapture(); model.status = "麦克风权限已撤销，字幕已停止。"; return
-                        }
-                        if let microphoneID {
-                            switch CaptionMicrophoneDevicePolicy.decide(configured: microphoneID, current: AVCaptureDevice.default(for: .audio)?.uniqueID) {
-                            case .unchanged: break
-                            case .changed:
-                                self.start(sourceLanguage: model.sourceLanguage, audioSource: .microphone, preserveSession: true); return
-                            case .unavailable:
-                                self.endCapture(); model.status = "麦克风已断开，请检查系统输入设备后重试。"; return
-                            }
                         }
                         elapsed += 1
                         if elapsed >= 45 {
@@ -412,7 +355,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
     #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
     private func installExperimentalRecognition(language: String, generation: UUID, environment: [String: String]) -> Bool {
-        guard let model = state, presentsPanel, sessionMode == .captions, model.audioSource == .system else {
+        guard let model = state, model.audioSource == .system else {
             state?.status = "实验说话人识别仅支持单路系统声音。"; return false
         }
         let keys = ["MORIQ_WHISPER_HELPER", "MORIQ_WHISPER_MODEL", "MORIQ_SPEAKER_HELPER", "MORIQ_SPEAKER_MODEL"]
@@ -461,7 +404,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         if let configured = Bundle.main.object(forInfoDictionaryKey: "MORIQManagedSpeechEndpoint") {
             guard let model = state else { return false }
             model.managedSpeech = true
-            let consentKeys = [model.audioSource == .microphone ? ManagedSpeechConsentMonitor.microphoneKey : ManagedSpeechConsentMonitor.key]
+            let consentKeys = [ManagedSpeechConsentMonitor.key]
             guard consentKeys.allSatisfy({ UserDefaults.standard.bool(forKey: $0) }) else {
                 model.status = "请先在设置中同意发送所选声音。"; return false
             }
@@ -665,37 +608,15 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         guard let model = state else { return }
         start(sourceLanguage: model.sourceLanguage, audioSource: model.audioSource, preserveSession: true)
     }
-    private func retainMicrophoneHistory() {
-        guard let microphone = microphoneCoordinator?.state else { return }
-        microphoneSourceLanguage = microphone.sourceLanguage
-        microphoneTargetLanguage = microphone.targetLanguage
-        if !microphone.original.isEmpty { microphone.accept(microphone.original, final: true) }
-        retainedMicrophoneHistory = microphone.history
-    }
     private func showPanel(_ model: LiveCaptionState, frame: NSRect? = nil) {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
-        let panelHeight: CGFloat = sessionMode == .interpretation ? 292 : 196
-        let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: 196), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.isMovableByWindowBackground = true
         panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        if let frame { panel.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 620, height: panelHeight), display: false) }
-        panel.contentView = NSHostingView(rootView: CaptionTrackStack(tracks: tracks, mainState: model, combined: sessionMode == .interpretation, main: makeCaptionView(model, secondary: false), microphone: { [weak self] mic in
-            self?.makeCaptionView(mic, secondary: true)
-        }))
-        self.panel = panel; panel.orderFrontRegardless()
-    }
-    private func makeCaptionView(_ model: LiveCaptionState, secondary: Bool) -> LiveCaptionView {
-        LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in
-            if secondary { self?.microphoneCoordinator?.installModel() } else { self?.installModel() }
-        }, changeLanguage: { [weak self] language in
+        if let frame { panel.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 620, height: 196), display: false) }
+        panel.contentView = NSHostingView(rootView: LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in self?.installModel() }, changeLanguage: { [weak self] language in
             guard let self else { return }
-            if secondary {
-                self.microphoneSourceLanguage = language
-                self.microphoneTargetLanguage = model.targetLanguage
-                self.microphoneCoordinator?.start(sourceLanguage: language, audioSource: .microphone, preserveSession: true, targetLanguage: model.targetLanguage)
-                return
-            }
-            if self.stream == nil { self.start(sourceLanguage: language, audioSource: model.audioSource); return }
+            if self.stream == nil { self.start(sourceLanguage: language, preserveSession: true); return }
             model.clearCurrent(); model.isCapturing = true
             let token = self.generation
             self.setup?.cancel()
@@ -704,25 +625,13 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 guard self.generation == token, self.state?.sourceLanguage == language else { return }
                 if !installed { self.endCapture() }
             }
-        }, changeAudioSource: { [weak self] source in
-            self?.start(sourceLanguage: model.sourceLanguage, audioSource: source, preserveSession: true)
-        }, changeSessionMode: { [weak self] mode in
-            self?.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, mode: mode)
-        }, changeTargetLanguage: { [weak self] target in
-            guard let self else { return }
-            if secondary { self.microphoneTargetLanguage = target }
-            // Local translation updates its own task. A managed stream has a
-            // fixed language pair, so restart only the affected audio track.
-            guard model.managedSpeech else { return }
-            if secondary {
-                self.microphoneCoordinator?.start(sourceLanguage: model.sourceLanguage, audioSource: .microphone, preserveSession: true, targetLanguage: target)
-            } else {
-                self.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, targetLanguage: target)
-            }
-        }, selectedSessionMode: sessionMode, secondaryTrack: secondary, embeddedTrack: sessionMode == .interpretation)
+        }, changeAudioSource: { _ in }, changeTargetLanguage: { [weak self] target in
+            guard let self, model.managedSpeech else { return }
+            self.start(sourceLanguage: model.sourceLanguage, preserveSession: true, targetLanguage: target)
+        }))
+        self.panel = panel; panel.orderFrontRegardless()
     }
     private func endCapture() {
-        if presentsPanel { microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil }
         state?.isCapturing = false
         recognitionID = UUID(); recognitionSetupID = UUID(); renewal?.cancel(); renewal = nil
         sink.clear(); managedSpeechAudio?.stop(); managedSpeechAudio = nil
@@ -740,36 +649,20 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         if let stream { self.stream = nil; Task { try? await stream.stopCapture() } }
     }
     func stop(notify: Bool = true) {
-        microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil
-        if notify { retainedMicrophoneHistory.removeAll() }
         generation = UUID(); setup?.cancel(); setup = nil; endCapture()
         panel?.orderOut(nil); panel = nil; state?.reset(); state = nil
-        onModelChange?(nil)
         if notify { onStop?() }
     }
     private enum CaptionFailure: Error { case display }
 
     #if DEBUG
     /// Offscreen UI/lifecycle test hook. Never starts a stream or recognizer.
-    func debugOpenWithoutCapture(mode: CaptionSessionMode, preserveSession: Bool = false) {
-        if preserveSession { retainMicrophoneHistory() }
-        else { retainedMicrophoneHistory.removeAll() }
+    func debugOpenWithoutCapture(mode: CaptionSessionMode = .captions) {
         stop(notify: false)
-        sessionMode = mode
         let model = LiveCaptionState(); model.audioSource = .system; state = model
-        if mode == .interpretation {
-            let child = LiveCaptionsCoordinator(presentsPanel: false)
-            let mic = LiveCaptionState(); mic.audioSource = .microphone; mic.sourceLanguage = microphoneSourceLanguage; mic.targetLanguage = microphoneTargetLanguage; mic.restoreHistory(retainedMicrophoneHistory)
-            child.state = mic; microphoneCoordinator = child; tracks.microphone = mic
-        }
         showPanel(model, frame: NSRect(x: -3000, y: -3000, width: 620, height: 196))
     }
     var debugHasPanel: Bool { panel != nil }
-    var debugHasMicrophoneTrack: Bool { tracks.microphone != nil }
-    var debugSessionMode: CaptionSessionMode { sessionMode }
-    func debugAcceptMicrophone(_ text: String) { microphoneCoordinator?.state?.accept(text) }
-    var debugMicrophoneHistory: [CaptionHistoryEntry] { microphoneCoordinator?.state?.history ?? [] }
-    var debugMicrophoneLanguages: (String, String)? { microphoneCoordinator?.state.map { ($0.sourceLanguage, $0.targetLanguage) } }
     #if MORIQ_SPEAKER_EXPERIMENTAL
     func debugStartSpeakerWithoutCapture(environment: [String: String], language: String = "en-US") -> Bool {
         debugOpenWithoutCapture(mode: .captions)
@@ -792,40 +685,6 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     #endif
 }
 
-private struct CaptionTrackStack: View {
-    @ObservedObject var tracks: CaptionTrackModels
-    @ObservedObject var mainState: LiveCaptionState
-    let combined: Bool
-    let main: LiveCaptionView
-    let microphone: (LiveCaptionState) -> LiveCaptionView?
-    var body: some View {
-        VStack(spacing: 0) {
-            main
-            if let model = tracks.microphone, let view = microphone(model) { view }
-        }
-        .frame(width: 620, height: combined ? 292 : 196, alignment: .top)
-        .background {
-            if combined { RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial) }
-        }
-        .overlay {
-            if combined {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
-                VStack(spacing: 0) {
-                    Spacer().frame(height: 146)
-                    Rectangle().fill(.primary.opacity(0.08)).frame(height: 0.5).padding(.horizontal, 20)
-                    Spacer()
-                }.allowsHitTesting(false)
-            }
-        }
-        .onReceive(tracks.$microphone) { model in
-            model?.mode = mainState.mode
-            model?.fontSize = mainState.fontSize
-        }
-        .onChange(of: mainState.mode) { _, value in tracks.microphone?.mode = value }
-        .onChange(of: mainState.fontSize) { _, value in tracks.microphone?.fontSize = value }
-    }
-}
-
 private struct LiveCaptionView: View {
     @ObservedObject var state: LiveCaptionState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -833,11 +692,7 @@ private struct LiveCaptionView: View {
     let installModel: () -> Void
     let changeLanguage: (String) -> Void
     let changeAudioSource: (CaptionAudioSource) -> Void
-    var changeSessionMode: ((CaptionSessionMode) -> Void)? = nil
     var changeTargetLanguage: ((String) -> Void)? = nil
-    var selectedSessionMode: CaptionSessionMode = .captions
-    var secondaryTrack = false
-    var embeddedTrack = false
     @State private var configuration: TranslationSession.Configuration?
     @State private var debounce: Task<Void, Never>?
     @State private var translationInFlight = false
@@ -873,29 +728,11 @@ private struct LiveCaptionView: View {
                 #endif
                 Spacer()
                 if state.needsSpeechModel { Button("重试", action: installModel).buttonStyle(.plain).font(.system(size: 11, weight: .medium)).help("重试语音资源") }
-                if secondaryTrack {
-                    Text("麦克风").foregroundStyle(.secondary)
-                } else if let changeSessionMode {
-                    Menu {
-                        ForEach(CaptionSessionMode.allCases, id: \.self) { mode in
-                            Button(mode.label) { if mode != selectedSessionMode { changeSessionMode(mode) } }
-                        }
-                    } label: { HStack(spacing: 4) { Text(selectedSessionMode.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择字幕模式")
-                } else {
-                    Menu {
-                        ForEach(CaptionAudioSource.allCases, id: \.self) { source in
-                            Button(source.label) { if source != state.audioSource { changeAudioSource(source) } }
-                        }
-                    } label: { HStack(spacing: 4) { Text(state.audioSource.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择声音来源")
-                }
                 Menu {
                     Picker("语音语言", selection: $state.sourceLanguage) { Text("英语").tag("en-US"); Text("中文").tag("zh-CN"); Text("日语").tag("ja-JP"); Text("韩语").tag("ko-KR") }
                     Picker("翻译语言", selection: $state.targetLanguage) { Text("中文").tag("zh-Hans"); Text("英语").tag("en-US") }
                 } label: { HStack(spacing: 4) { Text("\(languageName) → \(targetLanguageName)"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择语音与翻译语言").accessibilityLabel("语音语言，\(languageName)，翻译语言，\(targetLanguageName)")
-                if !secondaryTrack {
                 Menu {
                     Picker("字幕模式", selection: $state.mode) { Text("双语").tag("bilingual"); Text("原文").tag("original"); Text("译文").tag("zh") }
                 } label: { HStack(spacing: 4) { Text(modeName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
@@ -903,7 +740,6 @@ private struct LiveCaptionView: View {
                 Button { state.showHistory.toggle() } label: { Image(systemName: "clock.arrow.circlepath").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(state.showHistory ? Color.accentColor : Color.secondary).help("字幕记录").accessibilityLabel("字幕记录")
                 Button { state.fontSize = state.fontSize >= 29 ? 19 : state.fontSize + 2 } label: { Image(systemName: "textformat.size").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("调整字号").accessibilityLabel("调整字号")
                 Button(action: close) { Image(systemName: "xmark").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("停止字幕").accessibilityLabel("停止字幕")
-                }
             }
             .font(.system(size: 11, weight: .medium))
             .frame(height: 26)
@@ -927,8 +763,7 @@ private struct LiveCaptionView: View {
                         VStack(spacing: 12) {
                             ForEach(precedingHistory) { item in
                                 VStack(spacing: 3) {
-                                    if state.mode != "zh" { Text(item.original) }
-                                    if state.mode != "original" && !item.translated.isEmpty { Text(item.translated) }
+                                    ForEach(Array(CaptionHistoryVisibility.lines(item, mode: state.mode).enumerated()), id: \.offset) { _, line in Text(line) }
                                 }.font(.system(size: max(14, state.fontSize - 5))).foregroundStyle(.secondary.opacity(0.7))
                             }
                             VStack(spacing: 3) {
@@ -998,12 +833,12 @@ private struct LiveCaptionView: View {
                 }
             }
             Spacer(minLength: 6)
-        }.padding(.horizontal, 18).padding(.vertical, 12).frame(width: 620, height: embeddedTrack ? 146 : 196)
+        }.padding(.horizontal, 18).padding(.vertical, 12).frame(width: 620, height: 196)
             .background {
-                if !embeddedTrack { RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial) }
+                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial)
             }
             .overlay {
-                if !embeddedTrack { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5) }
+                RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
             }
         .onChange(of: state.revision) { _, _ in scheduleTranslation() }
         .task(id: state.original) { await reveal(state.original, into: $visibleOriginal) }
@@ -1049,7 +884,9 @@ private struct LiveCaptionView: View {
     }
     private func restartTranslation() {
         debounce?.cancel(); debounce = nil; translationRequestID = UUID(); translationInFlight = false; configuration = nil
-        if state.isCapturing && state.status == "语音与翻译语言相同，请选择不同语言。" { state.status = "正在聆听\(state.audioSource.label)" }
+        if state.status == "语音与翻译语言相同，请选择不同语言。" {
+            state.status = state.isCapturing ? "正在聆听\(state.audioSource.label)" : "准备中"
+        }
         scheduleTranslation()
     }
     private func scheduleTranslation() {

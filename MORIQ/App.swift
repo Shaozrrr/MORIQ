@@ -8,7 +8,6 @@ import ImageIO
 import Security
 import UniformTypeIdentifiers
 import Speech
-import AVFoundation
 #if DEBUG
 import CryptoKit
 #endif
@@ -467,7 +466,7 @@ struct MORIQApp: App {
             FolderAccessProbe.verifiedThisLaunch = true
             let blocksUnverifiedAudio = !flow.mayEnter
             CaptionAudioPermissionProbe.verifiedThisLaunch = true
-            let expected = CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            let expected = CGPreflightScreenCaptureAccess() && AXIsProcessTrusted()
             let matchesCurrentGrants = flow.mayEnter == expected
             DirectScreenAccessProbe.verifiedThisLaunch = false
             FolderAccessProbe.verifiedThisLaunch = false

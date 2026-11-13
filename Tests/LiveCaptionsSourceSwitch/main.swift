@@ -10,106 +10,52 @@ final class Counter: @unchecked Sendable {
 }
 final class Recognition: @unchecked Sendable {
  private let lock=NSLock(); private var matched=false; private var failure: String?
- private let expected: String
- init(_ expected:String = "meeting") { self.expected = expected }
- func update(_ text:String) { lock.lock(); if text.lowercased().contains(expected) { matched=true }; lock.unlock() }
+ func update(_ text:String) { lock.lock(); if text.lowercased().contains("meeting") { matched=true }; lock.unlock() }
  func error(_ message:String) { lock.lock(); failure=message; lock.unlock() }
  func status() -> (Bool,String?) { lock.lock(); defer { lock.unlock() }; return (matched,failure) }
 }
 @main struct Check {
  static func main() async throws {
-  precondition(CaptionSessionMode.captions.audioSources == [.system])
-  precondition(CaptionSessionMode.interpretation.audioSources == [.system, .microphone])
-  precondition(CaptionMicrophoneDevicePolicy.decide(configured:"input-a",current:"input-a") == .unchanged)
-  precondition(CaptionMicrophoneDevicePolicy.decide(configured:"input-a",current:"input-b") == .changed)
-  precondition(CaptionMicrophoneDevicePolicy.decide(configured:"input-a",current:nil) == .unavailable)
-  precondition(CaptionMicrophoneDevicePolicy.decide(configured:"input-a",current:"") == .unavailable)
+  precondition(CaptionAudioSource.allCases == [.system])
+  precondition(CaptionAudioSource.system.accepts(.audio) && !CaptionAudioSource.system.accepts(.microphone))
   let source=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("Tests/LiveCaptionsSystemAudio/synthetic.wav")
   let asset=AVURLAsset(url:source)
   guard let track=try await asset.loadTracks(withMediaType:.audio).first else { fatalError("fixture missing") }
   let reader=try AVAssetReader(asset:asset)
   let output=AVAssetReaderTrackOutput(track:track,outputSettings:[AVFormatIDKey:kAudioFormatLinearPCM, AVLinearPCMBitDepthKey:32, AVLinearPCMIsFloatKey:true, AVLinearPCMIsNonInterleaved:false])
   reader.add(output); precondition(reader.startReading())
-  guard let sample=output.copyNextSampleBuffer(), sample.isValid else { fatalError("synthetic sample missing") }
-  var samples=[sample]
-  while let next=output.copyNextSampleBuffer() { samples.append(next) }
-  precondition(reader.status == .completed)
+  var samples:[CMSampleBuffer]=[]
+  while let sample=output.copyNextSampleBuffer() { samples.append(sample) }
+  precondition(reader.status == .completed && !samples.isEmpty)
   let content=try await SCShareableContent.excludingDesktopWindows(false,onScreenWindowsOnly:false)
   guard let display=content.displays.first else { print("BLOCKED no display available"); exit(2) }
   let filter=SCContentFilter(display:display,excludingWindows:[])
   let config=SCStreamConfiguration(); config.capturesAudio=false; if #available(macOS 15, *) { config.captureMicrophone=false }
-  // Construct only: no stream is started, no system or microphone audio is collected.
+  // Construct only: neither real system audio nor a microphone is captured.
   let old=SCStream(filter:filter,configuration:config,delegate:nil)
-  let middle=SCStream(filter:filter,configuration:config,delegate:nil)
-  let newest=SCStream(filter:filter,configuration:config,delegate:nil)
-  let sink=LiveCaptionAudioSink(), counter=Counter()
-  sink.setWhisper { _ in counter.add() }
-  sink.selectSource(.system,stream:old)
+  let active=SCStream(filter:filter,configuration:config,delegate:nil)
+  let sink=LiveCaptionAudioSink(), counter=Counter(), sample=samples[0]
+  sink.selectSource(.system,stream:active); sink.setWhisper { _ in counter.add() }
   sink.stream(old,didOutputSampleBuffer:sample,of:.audio)
-  sink.stream(old,didOutputSampleBuffer:sample,of:.microphone)
-  sink.stream(newest,didOutputSampleBuffer:sample,of:.audio)
-  precondition(counter.get()==1,"wrong source or stream accepted")
-  sink.selectSource(.microphone,stream:middle)
-  sink.stream(old,didOutputSampleBuffer:sample,of:.audio)
-  sink.stream(middle,didOutputSampleBuffer:sample,of:.audio)
-  sink.stream(middle,didOutputSampleBuffer:sample,of:.microphone)
-  precondition(counter.get()==2,"microphone routing or stale stream failed")
-  sink.selectSource(.system,stream:newest)
-  sink.stream(old,didOutputSampleBuffer:sample,of:.audio)
-  sink.stream(middle,didOutputSampleBuffer:sample,of:.microphone)
-  sink.stream(newest,didOutputSampleBuffer:sample,of:.audio)
-  precondition(counter.get()==3,"stale system/microphone frames crossed sessions")
+  sink.stream(active,didOutputSampleBuffer:sample,of:.microphone)
+  sink.stream(active,didOutputSampleBuffer:sample,of:.audio)
+  precondition(counter.get()==1,"stale or microphone buffers must be rejected")
   DispatchQueue.concurrentPerform(iterations:10_000) { index in
-   sink.stream(index % 2 == 0 ? newest : old, didOutputSampleBuffer:sample,of:.audio)
+   sink.stream(index % 2 == 0 ? active : old,didOutputSampleBuffer:sample,of:.audio)
   }
-  precondition(counter.get()==5003,"concurrent routing mismatch")
-  sink.clear(); sink.stream(newest,didOutputSampleBuffer:sample,of:.audio)
-  precondition(counter.get()==5003,"stop did not clear routing")
+  precondition(counter.get()==5001,"concurrent routing mismatch")
   let base=URL(fileURLWithPath:FileManager.default.currentDirectoryPath)
-  for (source, stream, type) in [(CaptionAudioSource.system,old,SCStreamOutputType.audio),(.microphone,middle,.microphone),(.system,newest,.audio)] {
-   let result=Recognition()
-   let engine=try LocalWhisperCaptionEngine(helper:base.appendingPathComponent("Vendor/SpeechEngine/moriq-speech"),model:base.appendingPathComponent("Vendor/SpeechEngine/ggml-base.bin"),language:"en",onText:{ text,_ in result.update(text) },onError:{ result.error($0) })
-   sink.selectSource(source,stream:stream); sink.setWhisper { [weak engine] sample in engine?.append(sample) }
-   for sample in samples { sink.stream(stream,didOutputSampleBuffer:sample,of:type) }
-   let deadline=Date().addingTimeInterval(20)
-   while !result.status().0 && result.status().1 == nil && Date() < deadline { try await Task.sleep(for:.milliseconds(50)) }
-   let status=result.status(); sink.clear(); engine.stop()
-   precondition(status.0 && status.1 == nil,"synthetic recognition failed after source switch")
-  }
-  // Both sources active concurrently: independently route synthetic buffers
-  // through separate sinks and separate real local recognition processes.
-  // Streams are constructed only; no microphone or system capture starts.
-  let systemSink=LiveCaptionAudioSink(), microphoneSink=LiveCaptionAudioSink()
-  let systemResult=Recognition(), microphoneResult=Recognition("weather")
-  guard let syntheticPath=ProcessInfo.processInfo.environment["MORIQ_SECOND_SYNTHETIC"] else { fatalError("second synthetic fixture missing") }
-  let secondAsset=AVURLAsset(url:URL(fileURLWithPath:syntheticPath))
-  guard let secondTrack=try await secondAsset.loadTracks(withMediaType:.audio).first else { fatalError("second fixture missing") }
-  let secondReader=try AVAssetReader(asset:secondAsset)
-  let secondOutput=AVAssetReaderTrackOutput(track:secondTrack,outputSettings:[AVFormatIDKey:kAudioFormatLinearPCM, AVLinearPCMBitDepthKey:32, AVLinearPCMIsFloatKey:true, AVLinearPCMIsNonInterleaved:false])
-  secondReader.add(secondOutput); precondition(secondReader.startReading())
-  var secondSamples:[CMSampleBuffer]=[]
-  while let next=secondOutput.copyNextSampleBuffer() { secondSamples.append(next) }
-  precondition(secondReader.status == .completed && !secondSamples.isEmpty)
-  let systemCount=Counter(), microphoneCount=Counter()
-  let helper=base.appendingPathComponent("Vendor/SpeechEngine/moriq-speech")
-  let model=base.appendingPathComponent("Vendor/SpeechEngine/ggml-base.bin")
-  let systemEngine=try LocalWhisperCaptionEngine(helper:helper,model:model,language:"en",onText:{ text,_ in systemResult.update(text) },onError:{ systemResult.error($0) })
-  let microphoneEngine=try LocalWhisperCaptionEngine(helper:helper,model:model,language:"en",onText:{ text,_ in microphoneResult.update(text) },onError:{ microphoneResult.error($0) })
-  systemSink.selectSource(.system,stream:old); microphoneSink.selectSource(.microphone,stream:middle)
-  systemSink.setWhisper { [weak systemEngine] sample in systemCount.add(); systemEngine?.append(sample) }
-  microphoneSink.setWhisper { [weak microphoneEngine] sample in microphoneCount.add(); microphoneEngine?.append(sample) }
-  for sample in samples { systemSink.stream(old,didOutputSampleBuffer:sample,of:.audio); microphoneSink.stream(old,didOutputSampleBuffer:sample,of:.audio) }
-  for sample in secondSamples { microphoneSink.stream(middle,didOutputSampleBuffer:sample,of:.microphone); systemSink.stream(middle,didOutputSampleBuffer:sample,of:.microphone) }
-  precondition(systemCount.get()==samples.count && microphoneCount.get()==secondSamples.count,"dual tracks accepted a wrong source")
-  let deadline=Date().addingTimeInterval(30)
-  while (!systemResult.status().0 || !microphoneResult.status().0) && systemResult.status().1 == nil && microphoneResult.status().1 == nil && Date() < deadline { try await Task.sleep(for:.milliseconds(50)) }
-  let sys=systemResult.status(), mic=microphoneResult.status()
-  systemSink.clear(); microphoneSink.clear(); systemEngine.stop(); microphoneEngine.stop()
-  systemSink.stream(old,didOutputSampleBuffer:sample,of:.audio)
-  microphoneSink.stream(middle,didOutputSampleBuffer:sample,of:.microphone)
-  precondition(systemCount.get()==samples.count && microphoneCount.get()==secondSamples.count,"stopped tracks accepted audio")
-  precondition(sys.0 && mic.0 && sys.1 == nil && mic.1 == nil,"simultaneous independent recognition failed")
-  print("PASS simultaneous synthetic system and microphone tracks: independent routing and recognition")
-  print("PASS synthetic source switching, default device policy, stale stream rejection, 10000 concurrent callbacks and stop")
+  let result=Recognition()
+  let engine=try LocalWhisperCaptionEngine(helper:base.appendingPathComponent("Vendor/SpeechEngine/moriq-speech"),model:base.appendingPathComponent("Vendor/SpeechEngine/ggml-base.bin"),language:"en",onText:{ text,_ in result.update(text) },onError:{ result.error($0) })
+  sink.setWhisper { [weak engine] sample in engine?.append(sample) }
+  for sample in samples { sink.stream(active,didOutputSampleBuffer:sample,of:.audio) }
+  let deadline=Date().addingTimeInterval(20)
+  while !result.status().0 && result.status().1 == nil && Date() < deadline { try await Task.sleep(for:.milliseconds(50)) }
+  let status=result.status(); sink.clear(); engine.stop()
+  precondition(status.0 && status.1 == nil,"synthetic system audio recognition failed")
+  let stopped=Counter(); sink.setWhisper { _ in stopped.add() }
+  sink.stream(active,didOutputSampleBuffer:sample,of:.audio)
+  precondition(stopped.get()==0,"stopped stream must reject buffers")
+  print("PASS system-only audio routing, microphone rejection, stale-stream isolation and synthetic recognition")
  }
 }

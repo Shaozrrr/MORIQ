@@ -61,7 +61,7 @@ enum Feature: String, CaseIterable, Identifiable {
     case converter, assistant, shelf, clipboard, screenshot, notes, captions
     var id: String { rawValue }
     var title: String { switch self { case .converter: "转换圆盘"; case .assistant: "AI 助手"; case .shelf: "文件暂存架"; case .clipboard: "剪贴板"; case .screenshot: "超级截图"; case .notes: "屏幕便签"; case .captions: "实时字幕" } }
-    var detail: String { switch self { case .converter: "拖动文件，快速转换格式"; case .assistant: "随时唤出，理解当前屏幕"; case .shelf: "将文件暂存屏幕边缘，随取随用"; case .clipboard: "保存复制记录，收藏常用内容"; case .screenshot: "框选、识别、翻译与标注"; case .notes: "随手记录，固定显示在桌面"; case .captions: "系统声音与麦克风实时字幕" } }
+    var detail: String { switch self { case .converter: "拖动文件，快速转换格式"; case .assistant: "随时唤出，理解当前屏幕"; case .shelf: "将文件暂存屏幕边缘，随取随用"; case .clipboard: "保存复制记录，收藏常用内容"; case .screenshot: "框选、识别、翻译与标注"; case .notes: "随手记录，固定显示在桌面"; case .captions: "为电脑声音生成实时字幕" } }
     var symbol: String { switch self { case .converter: "arrow.triangle.2.circlepath"; case .assistant: "sparkle"; case .shelf: "tray.2"; case .clipboard: "doc.on.clipboard"; case .screenshot: "viewfinder"; case .notes: "note.text"; case .captions: "captions.bubble" } }
 }
 
@@ -94,7 +94,6 @@ struct SettingsView: View {
     @AppStorage("moriq.converterModifier") private var converterModifier = "shift"
     @AppStorage("moriq.permissionDarkMode") private var dark = false
     @AppStorage("moriq.managedSpeechConsent") private var managedSpeechConsent = false
-    @AppStorage("moriq.managedMicrophoneConsent") private var managedMicrophoneConsent = false
     @State private var section: Section = .features
     @StateObject private var shortcutRecorder = ShortcutRecorder()
     @ObservedObject var store: SettingsStore
@@ -247,16 +246,7 @@ struct SettingsView: View {
                     Spacer()
                     Toggle("允许在线字幕翻译", isOn: $managedSpeechConsent).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }.frame(minHeight: 70)
-                Divider()
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("在线麦克风字幕").font(.system(size: 13, weight: .semibold))
-                        Text("选择麦克风时，将麦克风声音发送至 MORIQ 及其语音服务进行识别和翻译。")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Toggle("允许发送麦克风声音", isOn: $managedMicrophoneConsent).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                }.frame(minHeight: 70)
+
             }
         }
     }
