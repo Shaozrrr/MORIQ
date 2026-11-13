@@ -10,6 +10,28 @@
 #include <cstring>
 #include <string>
 #include <vector>
+// whisper.cpp BPE may split one UTF-8 scalar across tokens. Only combine
+// complete sequences; never split one multi-character token into guessed times.
+enum class Utf8Status { complete, incomplete, invalid };
+static Utf8Status utf8_status(const std::string &s) {
+ size_t i=0;
+ while(i<s.size()) {
+  const unsigned char c=(unsigned char)s[i]; size_t n=0; uint32_t v=0;
+  if(c<0x80) { n=1; v=c; }
+  else if(c>=0xc2 && c<=0xdf) { n=2; v=c&0x1f; }
+  else if(c>=0xe0 && c<=0xef) { n=3; v=c&0x0f; }
+  else if(c>=0xf0 && c<=0xf4) { n=4; v=c&0x07; }
+  else return Utf8Status::invalid;
+  if(i+n>s.size()) {
+   for(size_t k=i+1;k<s.size();k++) if(((unsigned char)s[k]&0xc0)!=0x80) return Utf8Status::invalid;
+   return Utf8Status::incomplete;
+  }
+  for(size_t k=1;k<n;k++) { const auto b=(unsigned char)s[i+k]; if((b&0xc0)!=0x80) return Utf8Status::invalid; v=(v<<6)|(b&0x3f); }
+  if((n==2 && v<0x80) || (n==3 && v<0x800) || (n==4 && v<0x10000) || (v>=0xd800 && v<=0xdfff) || v>0x10ffff) return Utf8Status::invalid;
+  i+=n;
+ }
+ return Utf8Status::complete;
+}
 int main(int argc,char**argv) {
  if(argc!=3 && !(argc==4 && std::strcmp(argv[3],"--word-timestamps")==0)) return 2;
  const bool timed=argc==4;
@@ -59,6 +81,32 @@ int main(int argc,char**argv) {
     word+=token;
    }
    flush(); puts("E"); fflush(stdout);
+  }
+  // CJK: one token can contain multiple characters, and one character may
+  // span multiple byte tokens. Emit intact model spans, never estimated words.
+  // The plain P/F transcript remains authoritative for all omitted tokens.
+  const bool cjk = std::strncmp(argv[2],"zh",2)==0 || std::strncmp(argv[2],"ja",2)==0 || std::strncmp(argv[2],"ko",2)==0;
+  if(timed && cjk) {
+   const uint64_t base=totalSamples-rolling.size();
+   printf("B\t%c\t%llu\t%llu\n",final?'F':'P',(unsigned long long)base,(unsigned long long)totalSamples);
+   std::string bytes; int64_t begin=-1,end=-1; bool validTiming=true;
+   auto reset=[&]() { bytes.clear(); begin=end=-1; validTiming=true; };
+   for(int si=0;si<whisper_full_n_segments(ctx);++si) for(int ti=0;ti<whisper_full_n_tokens(ctx,si);++ti) {
+    auto d=whisper_full_get_token_data(ctx,si,ti); const char *token=whisper_full_get_token_text(ctx,si,ti);
+    if(d.id>=whisper_token_eot(ctx) || !token || !*token) continue;
+    if(d.t0<0 || d.t1<=d.t0 || d.t1>(int64_t)(rolling.size()/160)) validTiming=false;
+    else { const int64_t s=d.t0*160,e=d.t1*160; if(begin<0 || s<begin) begin=s; if(e>end) end=e; }
+    bytes+=token;
+    const auto state=utf8_status(bytes);
+    if(state==Utf8Status::incomplete && bytes.size()<=64) continue;
+    if(state==Utf8Status::complete && validTiming && begin>=0 && end>begin) {
+     printf("W\t%llu\t%llu\t",(unsigned long long)(base+begin),(unsigned long long)(base+end));
+     static const char hex[]="0123456789abcdef";
+     for(unsigned char c:bytes) { putchar(hex[c>>4]); putchar(hex[c&15]); } putchar('\n');
+    }
+    reset();
+   }
+   puts("E"); fflush(stdout);
   }
   if(final && rolling.size()>keep) rolling.erase(rolling.begin(),rolling.end()-keep);
   if(n<step) break;

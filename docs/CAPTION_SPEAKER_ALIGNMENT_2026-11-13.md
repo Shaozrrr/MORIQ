@@ -51,3 +51,11 @@
 4. 时间对齐时应允许尚未确定的标签和后续修正；保留重叠说话与低置信度为未知，按真实评测校准阈值，避免稳定但错误地分配。词与字幕历史的同步和译文绑定需单独验收。
 5. 如需显示真实姓名，必须另有明确的用户标注或经同意的身份注册流程；匿名编号不等于真实身份，不能靠声线或语义猜名字。
 6. 端到端验收应包含不同说话人数量、口音、背景声、短句和打断、重叠说话、长会话、音源与设备切换；记录说话人分离错误率、身份混淆、首次出现延迟、修正次数、资源占用，并与所选竞品和用户期望对照。不得仅凭合成单人测试声称高准确率。
+
+## 中文 token 时间的隔离验证（2026-11-13）
+
+复用相同固定提交的 whisper.cpp `whisper_full_get_token_data`，用公开四人中文录音的前 10 秒、`zh` 和本机 base 模型，取得 5 个滚动窗口；真实输出中有中文 UTF-8 字符被分拆到多个 token（如两段字节分别带时间），也有一个 token 包含多个汉字。因此原型仅将不完整 UTF-8 片段合并、取实际来源 token 的最早开始和最晚结束，不把多字 token 均分，不声称中文词或单字时间真值。`Tests/CaptionTokenTimestampProbe/cjk_timing.py` 对公开样本生成 66 个非纯符号的正时长文本片段，其中 9 个由跨 token 字节合并；数据或不完整/纯符号片段不能归属时应返回未知，原文仍应保留。公开 Sortformer 结果用测试阈值 0.7/0.2 按重叠计算得到 54 个单一候选、12 个未知；窗口有重复，样本无逐字/说话人真值，这不是识别准确率也不验证姓名、噪声、重叠语音或完整中文分词。测试不采集私人音频。
+
+运行示例：`python3 Tests/CaptionTokenTimestampProbe/cjk_timing.py --whisper-source /tmp/moriq-whisper-audit-src --whisper-build /tmp/moriq-whisper-helper-build --ffmpeg Vendor/MediaEngine/ffmpeg --audio /tmp/moriq-public-four-speakers-zh.wav`。中文增量时间尚未接入生产 helper；日语、韩语只共享编码处理的合成单测，没有真实音频验证。下一步需要时间真值、零时长文本保留、采集时钟映射、片段/窗口去重，以及全链路准确率和性能验收。
+
+同日后续：上述 UTF-8 合并策略已移入生产 helper 的可选 `--word-timestamps` 模式，默认 P/F 字幕文本协议保持不变；`zh`、`ja`、`ko` 输出仍是原模型 token 文本片段，不是语言学分词。用公开中文录音运行 helper→Swift 桥、旧模式与定时模式 P/F 文本逐行一致、零时长与拆分 UTF-8 模拟、英语定时回归和 x86_64 Rosetta 通过。两架构最低系统版本 15.0；真实日语、韩语、实体 Intel 和时间标注误差尚未验证，也不能由此声称说话人姓名识别准确。新版 helper 摘要与限制见 Vendor/SpeechEngine/README.md。
