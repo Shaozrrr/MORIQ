@@ -66,5 +66,8 @@ MainActor.assumeIsolated {
  precondition(remote.translated == "你好。", "independent translation stream should remain visible")
  remote.mode = "original"; remote.mode = "bilingual"
  precondition(remote.translated == "你好。", "view mode must not erase an independent provider translation")
+ let restored = LiveCaptionState()
+ restored.restoreHistory(remote.history)
+ precondition(restored.history.map(\.id) == remote.history.map(\.id), "source switches must retain history")
  print("PASS: translation revisions, history association, long text, clear")
 }

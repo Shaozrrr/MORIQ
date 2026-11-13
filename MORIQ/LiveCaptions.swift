@@ -118,6 +118,7 @@ struct CaptionHistoryEntry: Identifiable {
         translatedForOriginal = source
     }
     func clearCurrent() { original = ""; translated = ""; translatedForOriginal = ""; stableTranslationText = ""; managedSourceSegment = nil; lastRecognitionUpdate = .distantPast; segmentFinalized = false; segmentID = UUID(); revision = UUID() }
+    func restoreHistory(_ entries: [CaptionHistoryEntry]) { history = Array(entries.suffix(30)) }
     func reset() { clearCurrent(); history.removeAll(); isCapturing = false }
 }
 
@@ -217,10 +218,17 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     var onStop: (() -> Void)?
 
     /// Called only from a user action.
-    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system) {
+    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false) {
+        if preserveSession, let state, !state.original.isEmpty { state.accept(state.original, final: true) }
+        let savedHistory = preserveSession ? state?.history ?? [] : []
+        let savedMode = preserveSession ? state?.mode : nil
+        let savedSize = preserveSession ? state?.fontSize : nil
+        let savedFrame = preserveSession ? panel?.frame : nil
         stop(notify: false)
         let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.audioSource = audioSource; state = model
-        showPanel(model)
+        model.restoreHistory(savedHistory)
+        if let savedMode { model.mode = savedMode }; if let savedSize { model.fontSize = savedSize }
+        showPanel(model, frame: savedFrame)
         let id = UUID(); generation = id
         setup = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -479,11 +487,12 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         guard let model = state else { return }
         start(sourceLanguage: model.sourceLanguage, audioSource: model.audioSource)
     }
-    private func showPanel(_ model: LiveCaptionState) {
+    private func showPanel(_ model: LiveCaptionState, frame: NSRect? = nil) {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
         let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: 196), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.isMovableByWindowBackground = true
         panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        if let frame { panel.setFrame(frame, display: false) }
         panel.contentView = NSHostingView(rootView: LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in self?.installModel() }, changeLanguage: { [weak self] language in
             guard let self else { return }
             if self.stream == nil { self.start(sourceLanguage: language, audioSource: model.audioSource); return }
@@ -496,7 +505,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 if !installed { self.endCapture() }
             }
         }, changeAudioSource: { [weak self] source in
-            self?.start(sourceLanguage: model.sourceLanguage, audioSource: source)
+            self?.start(sourceLanguage: model.sourceLanguage, audioSource: source, preserveSession: true)
         }))
         self.panel = panel; panel.orderFrontRegardless()
     }
