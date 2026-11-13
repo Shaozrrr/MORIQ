@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 @main struct Probe: App {
  @StateObject var state = LiveCaptionState()
- var body: some Scene { WindowGroup { LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }).task {
+ var body: some Scene { WindowGroup { LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }, changeAudioSource: { _ in }).task {
   var sawTranslationDuringUpdates = false
   let sentence = "The meeting starts at three o'clock this afternoon and the team will review our progress together before discussing the schedule for next week."
   let words = sentence.split(separator: " ")

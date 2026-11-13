@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 @main struct Probe: App {
  @StateObject var state = LiveCaptionState()
- var body: some Scene { WindowGroup { LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }).task {
+ var body: some Scene { WindowGroup { LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }, changeAudioSource: { _ in }).task {
   state.accept("The meeting starts at three o'clock this afternoon.", final: true)
   for _ in 0..<200 { if state.isTranslationCurrent { break }; try? await Task.sleep(for: .milliseconds(100)) }
   guard !state.translated.isEmpty, state.translated != state.original, state.history.last?.translated == state.translated else { print("FAIL translation: \(state.translated), status: \(state.status)"); fflush(stdout); exit(1) }

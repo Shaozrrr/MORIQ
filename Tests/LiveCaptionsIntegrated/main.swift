@@ -36,7 +36,7 @@ final class Sink: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
         guard CGPreflightScreenCaptureAccess() else { print("BLOCKED screen permission"); exit(2) }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 150), styleMask: [.titled], backing: .buffered, defer: false)
         window.title = "MORIQ synthetic subtitle test"
-        window.contentView = NSHostingView(rootView: LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }))
+        window.contentView = NSHostingView(rootView: LiveCaptionView(state: state, close: {}, installModel: {}, changeLanguage: { _ in }, changeAudioSource: { _ in }))
         window.orderFront(nil); self.window = window
         let sink = Sink(state: state); self.sink = sink
         do {
