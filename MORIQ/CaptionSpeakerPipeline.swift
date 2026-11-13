@@ -20,6 +20,7 @@ final class CaptionSpeakerPipeline: @unchecked Sendable {
     private let events = DispatchQueue(label: "local.moriq.speaker.alignment", qos: .userInitiated)
     private let minimumCoverage: Double, maximumCompetition: Double
     private let onUpdate: @Sendable (CaptionAttributedWindow) -> Void
+    private let onFailure: @Sendable () -> Void
     private var bridge: SpeakerDiarizationBridge?
     private var active = true, failed = false
     private var nextSample: Int64 = 0
@@ -27,12 +28,13 @@ final class CaptionSpeakerPipeline: @unchecked Sendable {
     private var turns: [CaptionSpeakerTurn] = []
 
     init(helper: URL, model: URL, generation: UUID = UUID(), minimumCoverage: Double,
-         maximumCompetition: Double, onUpdate: @escaping @Sendable (CaptionAttributedWindow) -> Void) throws {
+         maximumCompetition: Double, onUpdate: @escaping @Sendable (CaptionAttributedWindow) -> Void,
+         onFailure: @escaping @Sendable () -> Void = {}) throws {
         guard minimumCoverage.isFinite, maximumCompetition.isFinite,
               (0...1).contains(minimumCoverage), (0...1).contains(maximumCompetition),
               minimumCoverage > maximumCompetition else { throw CaptionPipelineError.invalidThresholds }
         self.generation = generation; self.minimumCoverage = minimumCoverage
-        self.maximumCompetition = maximumCompetition; self.onUpdate = onUpdate
+        self.maximumCompetition = maximumCompetition; self.onUpdate = onUpdate; self.onFailure = onFailure
         self.bridge = nil
         self.bridge = try SpeakerDiarizationBridge(helper: helper, model: model,
             onTurns: { [weak self] turns in self?.receive(turns) },
@@ -94,6 +96,7 @@ final class CaptionSpeakerPipeline: @unchecked Sendable {
         lock.lock(); let notify = active && !failed; failed = true; let bridge = self.bridge; lock.unlock()
         guard notify else { return }
         bridge?.stop()
+        onFailure()
         events.async { [weak self] in
             guard let self, self.isActive else { return }
             self.turns.removeAll()
