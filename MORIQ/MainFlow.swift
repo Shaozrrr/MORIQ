@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ApplicationServices
 import Speech
+import AVFoundation
 
 @MainActor final class AppFlow: ObservableObject {
     enum Page { case introduction, permissions, settings, demo(Feature), connection, screenshotEditor(CGImage), conversionResults }
@@ -12,7 +13,7 @@ import Speech
     var introComplete = UserDefaults.standard.bool(forKey: "moriq.introComplete")
     var onFirstEntry: (() -> Void)?
     private var entered = false
-    var mayEnter: Bool { CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() && FolderAccessProbe.verifiedThisLaunch && DirectScreenAccessProbe.verifiedThisLaunch && CaptionAudioPermissionProbe.verifiedThisLaunch }
+    var mayEnter: Bool { CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() && FolderAccessProbe.verifiedThisLaunch && DirectScreenAccessProbe.verifiedThisLaunch && CaptionAudioPermissionProbe.verifiedThisLaunch && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     func enterSettings() {
         guard introComplete else { page = .introduction; return }
         guard mayEnter else { page = .permissions; return }

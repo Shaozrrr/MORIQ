@@ -7,6 +7,14 @@ import Speech
 import SwiftUI
 import Translation
 
+enum CaptionAudioSource: String, CaseIterable {
+    case system, microphone
+    var label: String { self == .system ? "系统声音" : "麦克风" }
+    func accepts(_ type: SCStreamOutputType) -> Bool {
+        (self == .system && type == .audio) || (self == .microphone && type == .microphone)
+    }
+}
+
 struct CaptionHistoryEntry: Identifiable {
     let id: UUID
     let original: String
@@ -23,6 +31,7 @@ struct CaptionHistoryEntry: Identifiable {
     @Published var status = "准备中"
     @Published var mode = "bilingual" { didSet { if mode != oldValue { if !managedSpeech { translated = "" }; revision = UUID() } } }
     @Published var sourceLanguage = "en-US"
+    @Published var audioSource: CaptionAudioSource = .system
     @Published var fontSize: Double = 23
     @Published var showHistory = false
     @Published var isCapturing = false
@@ -112,12 +121,14 @@ struct CaptionHistoryEntry: Identifiable {
     func reset() { clearCurrent(); history.removeAll(); isCapturing = false }
 }
 
-/// Audio callback never requests microphone samples and never writes recordings.
+/// Routes only the explicitly selected source; audio is never written to disk.
 private final class LiveCaptionAudioSink: NSObject, SCStreamOutput, @unchecked Sendable {
     private let lock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var analyzerHandler: (@Sendable (CMSampleBuffer) -> Void)?
     private var whisperHandler: (@Sendable (CMSampleBuffer) -> Void)?
+    private var audioSource: CaptionAudioSource = .system
+    func selectSource(_ source: CaptionAudioSource) { lock.lock(); audioSource = source; lock.unlock() }
     func setWhisper(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) { lock.lock(); whisperHandler = handler; lock.unlock() }
     func setAnalyzer(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) { lock.lock(); analyzerHandler = handler; lock.unlock() }
     private var recent: [(CMSampleBuffer, Double)] = []
@@ -130,8 +141,9 @@ private final class LiveCaptionAudioSink: NSObject, SCStreamOutput, @unchecked S
     }
     func clear() { lock.lock(); request = nil; analyzerHandler = nil; whisperHandler = nil; recent.removeAll(); recentDuration = 0; lock.unlock() }
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sample.isValid else { return }
+        guard sample.isValid else { return }
         lock.lock(); defer { lock.unlock() }
+        guard audioSource.accepts(type) else { return }
         let duration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample))
         let seconds = duration.isFinite && duration > 0 ? min(duration, 1) : 0.05
         recent.append((sample, seconds)); recentDuration += seconds
@@ -205,30 +217,35 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     var onStop: (() -> Void)?
 
     /// Called only from a user action.
-    func start(sourceLanguage: String = "en-US") {
+    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system) {
         stop(notify: false)
-        let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; state = model
+        let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.audioSource = audioSource; state = model
         showPanel(model)
         let id = UUID(); generation = id
         setup = Task { @MainActor [weak self] in
             guard let self else { return }
             guard CGPreflightScreenCaptureAccess() else { model.status = "请先授权屏幕与系统音频录制。"; return }
+            if audioSource == .microphone {
+                guard await AVCaptureDevice.requestAccess(for: .audio) else { model.status = "请先在系统设置中允许麦克风访问。"; return }
+                guard !Task.isCancelled, self.generation == id else { return }
+            }
             guard await self.installRecognition(language: model.sourceLanguage, generation: id) else { return }
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard !Task.isCancelled, self.generation == id else { return }
                 guard let display = content.displays.first else { throw CaptionFailure.display }
-                let config = SCStreamConfiguration(); config.capturesAudio = true; config.excludesCurrentProcessAudio = true
+                let config = SCStreamConfiguration(); config.capturesAudio = audioSource == .system; config.excludesCurrentProcessAudio = true
                 config.width = 2; config.height = 2; config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-                if #available(macOS 15.0, *) { config.captureMicrophone = false }
+                if #available(macOS 15.0, *) { config.captureMicrophone = audioSource == .microphone }
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let stream = SCStream(filter: filter, configuration: config, delegate: self)
-                try stream.addStreamOutput(self.sink, type: .audio, sampleHandlerQueue: DispatchQueue(label: "local.moriq.captions.audio", qos: .userInitiated))
+                self.sink.selectSource(audioSource)
+                try stream.addStreamOutput(self.sink, type: audioSource == .system ? .audio : .microphone, sampleHandlerQueue: DispatchQueue(label: "local.moriq.captions.audio", qos: .userInitiated))
                 self.stream = stream
                 try await stream.startCapture()
                 guard !Task.isCancelled, self.generation == id else { try? await stream.stopCapture(); return }
                 model.isCapturing = true
-                model.status = model.managedSpeech ? "正在向语音服务发送系统音频" : "正在处理系统音频 · 本机识别"
+                model.status = model.managedSpeech ? "正在向语音服务发送\(audioSource.label)" : "正在聆听\(audioSource.label)"
                 self.renewal = Task { @MainActor [weak self] in
                     var elapsed = 0
                     while !Task.isCancelled {
@@ -238,6 +255,9 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                             CaptionAudioPermissionProbe.verifiedThisLaunch = false; CaptionAudioPermissionProbe.previouslyVerified = false
                             self.endCapture(); model.status = "屏幕与系统音频权限已撤销，字幕已停止。"; return
                         }
+                        if audioSource == .microphone && AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+                            self.endCapture(); model.status = "麦克风权限已撤销，字幕已停止。"; return
+                        }
                         elapsed += 1
                         if elapsed >= 45 { elapsed = 0; if self.analyzerBridge == nil && self.whisper == nil && self.managedSpeechStream == nil { _ = await self.installRecognition(language: model.sourceLanguage, generation: id) } }
                     }
@@ -245,7 +265,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             } catch {
                 guard !Task.isCancelled, self.generation == id else { return }
                 CaptionAudioPermissionProbe.verifiedThisLaunch = false; CaptionAudioPermissionProbe.previouslyVerified = false
-                self.endCapture(); model.status = "系统音频无法启动，请检查屏幕与系统音频录制权限。"
+                self.endCapture(); model.status = "\(audioSource.label)无法启动，请检查相关系统权限。"
             }
         }
     }
@@ -256,13 +276,14 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         if let configured = Bundle.main.object(forInfoDictionaryKey: "MORIQManagedSpeechEndpoint") {
             guard let model = state else { return false }
             model.managedSpeech = true
-            guard UserDefaults.standard.bool(forKey: "moriq.managedSpeechConsent") else {
-                model.status = "请先在设置中同意将系统音频发送至语音服务。"; return false
+            let consentKeys = [model.audioSource == .microphone ? ManagedSpeechConsentMonitor.microphoneKey : ManagedSpeechConsentMonitor.key]
+            guard consentKeys.allSatisfy({ UserDefaults.standard.bool(forKey: $0) }) else {
+                model.status = "请先在设置中同意发送所选声音。"; return false
             }
             managedSpeechConsentObserver?.stop()
-            managedSpeechConsentObserver = ManagedSpeechConsentMonitor { [weak self] in
+            managedSpeechConsentObserver = ManagedSpeechConsentMonitor(requiredKeys: consentKeys) { [weak self] in
                 guard let self, self.generation == generation else { return }
-                self.setup?.cancel(); self.endCapture(); self.state?.status = "系统音频发送授权已撤销，字幕已停止。"
+                self.setup?.cancel(); self.endCapture(); self.state?.status = "声音发送授权已撤销，字幕已停止。"
             }
             guard let value = configured as? String, let endpoint = URL(string: value),
                   let token = try? ManagedAIAccountToken().load(), !token.isEmpty else {
@@ -281,7 +302,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 let events = try await remote.start(source: source, target: "zh")
                 var iterator = events.makeAsyncIterator()
                 guard let first = try await iterator.next(), first.type == "ready", self.generation == generation, self.recognitionSetupID == setupID,
-                      UserDefaults.standard.bool(forKey: "moriq.managedSpeechConsent"), !Task.isCancelled else {
+                      consentKeys.allSatisfy({ UserDefaults.standard.bool(forKey: $0) }), !Task.isCancelled else {
                     await remote.cancel(); managedSpeechStream = nil
                     model.status = "语音服务未能连接，请重试。"; return false
                 }
@@ -450,12 +471,13 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self, self.stream === stream else { return }
             CaptionAudioPermissionProbe.verifiedThisLaunch = false; CaptionAudioPermissionProbe.previouslyVerified = false
-            self.endCapture(); self.state?.status = "系统音频已停止，请检查权限后重试。"
+            let source = self.state?.audioSource.label ?? "声音"
+            self.endCapture(); self.state?.status = "\(source)已停止，请检查权限后重试。"
         }
     }
     private func installModel() {
         guard let model = state else { return }
-        start(sourceLanguage: model.sourceLanguage)
+        start(sourceLanguage: model.sourceLanguage, audioSource: model.audioSource)
     }
     private func showPanel(_ model: LiveCaptionState) {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
@@ -464,7 +486,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in self?.installModel() }, changeLanguage: { [weak self] language in
             guard let self else { return }
-            if self.stream == nil { self.start(sourceLanguage: language); return }
+            if self.stream == nil { self.start(sourceLanguage: language, audioSource: model.audioSource); return }
             model.clearCurrent(); model.isCapturing = true
             let token = self.generation
             self.setup?.cancel()
@@ -473,6 +495,8 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 guard self.generation == token, self.state?.sourceLanguage == language else { return }
                 if !installed { self.endCapture() }
             }
+        }, changeAudioSource: { [weak self] source in
+            self?.start(sourceLanguage: model.sourceLanguage, audioSource: source)
         }))
         self.panel = panel; panel.orderFrontRegardless()
     }
@@ -502,6 +526,7 @@ private struct LiveCaptionView: View {
     let close: () -> Void
     let installModel: () -> Void
     let changeLanguage: (String) -> Void
+    let changeAudioSource: (CaptionAudioSource) -> Void
     @State private var configuration: TranslationSession.Configuration?
     @State private var debounce: Task<Void, Never>?
     @State private var translationInFlight = false
@@ -531,6 +556,12 @@ private struct LiveCaptionView: View {
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer()
                 if state.needsSpeechModel { Button("重试", action: installModel).buttonStyle(.plain).font(.system(size: 11, weight: .medium)).help("重试语音资源") }
+                Menu {
+                    ForEach(CaptionAudioSource.allCases, id: \.self) { source in
+                        Button(source.label) { if source != state.audioSource { changeAudioSource(source) } }
+                    }
+                } label: { HStack(spacing: 4) { Text(state.audioSource.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择声音来源")
                 Menu {
                     Picker("语音语言", selection: $state.sourceLanguage) { Text("英语").tag("en-US"); Text("中文").tag("zh-CN"); Text("日语").tag("ja-JP"); Text("韩语").tag("ko-KR") }
                 } label: { HStack(spacing: 4) { Text(languageName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }

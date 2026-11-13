@@ -56,5 +56,15 @@ MainActor.assumeIsolated {
  precondition(s.translationSnapshot == "And so my fellow Americans ask")
  s.accept("And so my fellow Americans, ask not what your country can do for you.", final: true)
  precondition(s.translationSnapshot.hasSuffix("can do for you."))
+ let remote = LiveCaptionState(); remote.managedSpeech = true
+ precondition(CaptionAudioSource.system.accepts(.audio) && !CaptionAudioSource.system.accepts(.microphone))
+ precondition(CaptionAudioSource.microphone.accepts(.microphone) && !CaptionAudioSource.microphone.accepts(.audio))
+ remote.acceptManagedSource("Hello.", segment: 1, final: true)
+ remote.acceptManagedTranslation("你好。")
+ remote.acceptManagedSource("Hello.", segment: 2, final: true)
+ precondition(remote.history.count == 2, "repeated source segments must remain distinct")
+ precondition(remote.translated == "你好。", "independent translation stream should remain visible")
+ remote.mode = "original"; remote.mode = "bilingual"
+ precondition(remote.translated == "你好。", "view mode must not erase an independent provider translation")
  print("PASS: translation revisions, history association, long text, clear")
 }

@@ -94,6 +94,7 @@ struct SettingsView: View {
     @AppStorage("moriq.converterModifier") private var converterModifier = "shift"
     @AppStorage("moriq.permissionDarkMode") private var dark = false
     @AppStorage("moriq.managedSpeechConsent") private var managedSpeechConsent = false
+    @AppStorage("moriq.managedMicrophoneConsent") private var managedMicrophoneConsent = false
     @State private var section: Section = .features
     @StateObject private var shortcutRecorder = ShortcutRecorder()
     @ObservedObject var store: SettingsStore
@@ -245,6 +246,16 @@ struct SettingsView: View {
                     }
                     Spacer()
                     Toggle("允许在线字幕翻译", isOn: $managedSpeechConsent).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }.frame(minHeight: 70)
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("在线麦克风字幕").font(.system(size: 13, weight: .semibold))
+                        Text("选择麦克风时，将麦克风声音发送至 MORIQ 及其语音服务进行识别和翻译。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Toggle("允许发送麦克风声音", isOn: $managedMicrophoneConsent).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }.frame(minHeight: 70)
             }
         }
