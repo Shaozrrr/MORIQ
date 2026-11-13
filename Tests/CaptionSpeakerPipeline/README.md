@@ -1,0 +1,7 @@
+# Speaker / subtitle bridge checks
+
+`run.sh` tests tentative turns, late final turns, generation stop, clock gaps and model failure using a synthetic helper. It also ensures small events are delivered while the helper is still running.
+
+`run-real.sh` requires a locally built MORIQSpeakerEngine, separately obtained Sortformer model, and the public two-speaker LibriSpeech sample and clip-level reference prepared by `Tests/SpeakerDiarizationResearch/public_two_speaker.py`. Point `MORIQ_SPEAKER_HELPER`, `MORIQ_SPEAKER_MODEL`, `MORIQ_SPEAKER_SAMPLE`, and `MORIQ_SPEAKER_REFERENCE` to those local files. Model and audio are not distributed by this test. This test sends no private audio and makes no online service requests.
+
+2026-11-13 Apple Silicon CPU, 67.59 s public clean turn-taking sample: 1,081,440 samples accepted, eight final ASR windows, 112 attributed word candidates and 14 unmatched; two anonymous IDs. Clip-level reference showed 66 candidate words from source A assigned to one ID and 46 from B to another. These counts are not DER, word-level accuracy, name identification accuracy, or evidence for overlapping speech, noise, or live latency; overlapping windows may duplicate candidates. Timing thresholds 0.7 / 0.2 are test fixtures and not calibrated production defaults. Chinese word timing, shared capture PTS mapping, low-confidence fallback calibration, name enrollment, Intel model support, and real meeting acceptance remain unresolved.

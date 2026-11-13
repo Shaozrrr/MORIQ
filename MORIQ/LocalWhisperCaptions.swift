@@ -86,6 +86,17 @@ enum LocalWhisperModel {
 
 /// The helper consumes only PCM via its stdin pipe. Pending writes are bounded;
 /// stop closes the pipe and terminates only this session's child process.
+struct WhisperTimedWord: Sendable, Equatable {
+    let text: String
+    let startSample: Int64
+    let endSample: Int64
+}
+struct WhisperTimedWindow: Sendable, Equatable {
+    let startSample: Int64
+    let endSample: Int64
+    let isFinal: Bool
+    let words: [WhisperTimedWord]
+}
 final class LocalWhisperCaptionEngine: @unchecked Sendable {
     private let lock = NSLock()
     private let writer = DispatchQueue(label: "local.moriq.captions.whisper-writer", qos: .userInitiated)
@@ -96,9 +107,16 @@ final class LocalWhisperCaptionEngine: @unchecked Sendable {
     private let process = Process(), input = Pipe(), output = Pipe()
     private let onText: @Sendable (String, Bool) -> Void
     private let onError: @Sendable (String) -> Void
-    init(helper: URL, model: URL, language: String, onText: @escaping @Sendable (String, Bool) -> Void, onError: @escaping @Sendable (String) -> Void) throws {
+    private let onTimedWords: (@Sendable (WhisperTimedWindow) -> Void)?
+    // Timestamp is the capture buffer's PTS in seconds (nil when invalid),
+    // not a wall-clock timestamp. Independent streams must not compare sample
+    // offsets unless their capture PTS are mapped to a shared clock first.
+    private let onAcceptedPCM: (@Sendable (Data, Int64, Double?) -> Void)?
+    private var acceptedSamples: Int64 = 0
+    init(helper: URL, model: URL, language: String, onText: @escaping @Sendable (String, Bool) -> Void, onError: @escaping @Sendable (String) -> Void, onTimedWords: (@Sendable (WhisperTimedWindow) -> Void)? = nil, onAcceptedPCM: (@Sendable (Data, Int64, Double?) -> Void)? = nil) throws {
         self.onText = onText; self.onError = onError
-        process.executableURL = helper; process.arguments = [model.path, language]
+        self.onTimedWords = onTimedWords; self.onAcceptedPCM = onAcceptedPCM
+        process.executableURL = helper; process.arguments = [model.path, language] + (onTimedWords == nil ? [] : ["--word-timestamps"])
         process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
         _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         try process.run()
@@ -123,23 +141,36 @@ final class LocalWhisperCaptionEngine: @unchecked Sendable {
         }
         guard status != .error, converted.frameLength > 0, let channel = converted.floatChannelData?[0] else { if status == .error { onError("系统音频转换失败。") }; return }
         let data = Data(bytes: channel, count: Int(converted.frameLength) * MemoryLayout<Float>.size)
-        enqueue(data)
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
+        let seconds = timestamp.isValid && timestamp.isNumeric ? CMTimeGetSeconds(timestamp) : .nan
+        enqueue(data, captureTime: seconds.isFinite ? seconds : nil)
     }
     #if DEBUG
     func appendSyntheticPCM(_ data: Data) { enqueue(data) }
     var debugIsRunning: Bool { process.isRunning }
     #endif
-    private func enqueue(_ data: Data) {
-        lock.lock(); if stopped { lock.unlock(); return }; guard pending + data.count <= 1_048_576 else { lock.unlock(); onError("字幕处理跟不上播放速度，部分声音未处理。" ); return }; pending += data.count; lock.unlock()
+    private func enqueue(_ data: Data, captureTime: Double? = nil) {
+        guard !data.isEmpty, data.count % MemoryLayout<Float>.size == 0 else { return }
+        lock.lock(); if stopped { lock.unlock(); return }; guard pending + data.count <= 1_048_576 else {
+            let timing = onTimedWords != nil || onAcceptedPCM != nil
+            lock.unlock(); onError(timing ? "字幕音频处理积压，已停止以避免说话人错位。" : "字幕处理跟不上播放速度，部分声音未处理。")
+            if timing { stop() }
+            return
+        }
+        let offset = acceptedSamples
+        acceptedSamples += Int64(data.count / MemoryLayout<Float>.size)
+        pending += data.count; lock.unlock()
         writer.async { [weak self] in
             guard let self else { return }
             self.lock.lock(); let active = !self.stopped; self.lock.unlock()
-            if active { do { try self.input.fileHandleForWriting.write(contentsOf: data) } catch { self.onError("字幕处理已停止。"); self.stop() } }
+            if active { do { self.onAcceptedPCM?(data, offset, captureTime); try self.input.fileHandleForWriting.write(contentsOf: data) } catch { self.onError("字幕处理已停止。"); self.stop() } }
             self.lock.lock(); self.pending -= data.count; self.lock.unlock()
         }
     }
     private func readOutput() {
         var pendingText = Data()
+        var timedStart: Int64?, timedEnd: Int64?, timedFinal = false
+        var timedWords: [WhisperTimedWord] = []
         while true {
             let data = output.fileHandleForReading.availableData
             if data.isEmpty { break }
@@ -147,7 +178,27 @@ final class LocalWhisperCaptionEngine: @unchecked Sendable {
             if pendingText.count > 65_536 { onError("字幕输出异常，已停止。"); stop(); return }
             while let newline = pendingText.firstIndex(of: 10) {
                 let line = pendingText.prefix(upTo: newline); pendingText.removeSubrange(...newline)
-                guard let text = String(data: line, encoding: .utf8), text.count >= 2, text.dropFirst().first == "\t" else { continue }
+                guard let text = String(data: line, encoding: .utf8) else { continue }
+                let fields = text.split(separator: "\t", omittingEmptySubsequences: false)
+                if fields.count == 4, fields[0] == "B", let start = Int64(fields[2]), let end = Int64(fields[3]), start >= 0, end > start, fields[1] == "P" || fields[1] == "F" {
+                    timedStart = start; timedEnd = end; timedFinal = fields[1] == "F"; timedWords.removeAll(keepingCapacity: true); continue
+                }
+                if fields.count == 4, fields[0] == "W", let start = Int64(fields[1]), let end = Int64(fields[2]), let lower = timedStart, let upper = timedEnd, start >= lower, end > start, end <= upper {
+                    let hex = Array(fields[3].utf8)
+                    guard hex.count > 0, hex.count <= 8192, hex.count % 2 == 0 else { continue }
+                    var bytes = Data(); bytes.reserveCapacity(hex.count / 2)
+                    var valid = true
+                    func digit(_ c: UInt8) -> UInt8? { if (48...57).contains(c) { return c - 48 }; if (97...102).contains(c) { return c - 87 }; return nil }
+                    for i in stride(from: 0, to: hex.count, by: 2) { guard let a = digit(hex[i]), let b = digit(hex[i+1]) else { valid = false; break }; bytes.append(a << 4 | b) }
+                    if valid, let word = String(data: bytes, encoding: .utf8), !word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, timedWords.count < 1024 { timedWords.append(WhisperTimedWord(text: word, startSample: start, endSample: end)) }
+                    continue
+                }
+                if text == "E", let start = timedStart, let end = timedEnd {
+                    lock.lock(); let active = !stopped; lock.unlock()
+                    if active { onTimedWords?(WhisperTimedWindow(startSample: start, endSample: end, isFinal: timedFinal, words: timedWords)) }
+                    timedStart = nil; timedEnd = nil; timedWords.removeAll(keepingCapacity: true); continue
+                }
+                guard text.count >= 2, text.dropFirst().first == "\t" else { continue }
                 let prefix = text.first; guard prefix == "P" || prefix == "F" else { continue }
                 lock.lock(); let active = !stopped; lock.unlock()
                 if active { onText(String(text.dropFirst(2)), prefix == "F") }

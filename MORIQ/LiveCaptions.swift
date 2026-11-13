@@ -15,6 +15,16 @@ enum CaptionAudioSource: String, CaseIterable {
     }
 }
 
+enum CaptionSessionMode: String, CaseIterable {
+    case captions, interpretation
+    var label: String { self == .captions ? "实时字幕" : "同声传译" }
+    var audioSources: [CaptionAudioSource] { self == .captions ? [.system] : [.system, .microphone] }
+}
+
+@MainActor private final class CaptionTrackModels: ObservableObject {
+    @Published var microphone: LiveCaptionState?
+}
+
 enum CaptionMicrophoneDeviceDecision { case unchanged, changed, unavailable }
 enum CaptionMicrophoneDevicePolicy {
     static func decide(configured: String, current: String?) -> CaptionMicrophoneDeviceDecision {
@@ -236,20 +246,32 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private var generation = UUID(), recognitionID = UUID(), recognitionSetupID = UUID()
     private var panel: NSPanel?
     private var state: LiveCaptionState?
+    private var microphoneCoordinator: LiveCaptionsCoordinator?
+    private let tracks = CaptionTrackModels()
+    private let presentsPanel: Bool
+    private var sessionMode: CaptionSessionMode = .captions
+    private var onModelChange: ((LiveCaptionState?) -> Void)?
     var onStop: (() -> Void)?
 
+    override convenience init() { self.init(presentsPanel: true) }
+    private init(presentsPanel: Bool) { self.presentsPanel = presentsPanel; super.init() }
+
     /// Called only from a user action.
-    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false) {
+    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false, mode: CaptionSessionMode? = nil) {
+        let selectedMode = mode ?? sessionMode
+        let audioSource: CaptionAudioSource = presentsPanel ? .system : audioSource
         if preserveSession, let state, !state.original.isEmpty { state.accept(state.original, final: true) }
         let savedHistory = preserveSession ? state?.history ?? [] : []
         let savedMode = preserveSession ? state?.mode : nil
         let savedSize = preserveSession ? state?.fontSize : nil
         let savedFrame = preserveSession ? panel?.frame : nil
         stop(notify: false)
+        sessionMode = selectedMode
         let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.audioSource = audioSource; state = model
+        onModelChange?(model)
         model.restoreHistory(savedHistory)
         if let savedMode { model.mode = savedMode }; if let savedSize { model.fontSize = savedSize }
-        showPanel(model, frame: savedFrame)
+        if presentsPanel { showPanel(model, frame: savedFrame) }
         let id = UUID(); generation = id
         setup = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -285,6 +307,12 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 guard !Task.isCancelled, self.generation == id else { try? await stream.stopCapture(); return }
                 model.isCapturing = true
                 model.status = model.managedSpeech ? "正在向语音服务发送\(audioSource.label)" : "正在聆听\(audioSource.label)"
+                if self.presentsPanel && selectedMode.audioSources.contains(.microphone) {
+                    let child = LiveCaptionsCoordinator(presentsPanel: false)
+                    child.onModelChange = { [weak self] model in self?.tracks.microphone = model }
+                    self.microphoneCoordinator = child
+                    child.start(sourceLanguage: sourceLanguage, audioSource: .microphone)
+                }
                 self.renewal = Task { @MainActor [weak self] in
                     var elapsed = 0
                     while !Task.isCancelled {
@@ -529,12 +557,24 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
     private func showPanel(_ model: LiveCaptionState, frame: NSRect? = nil) {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
-        let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: 196), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panelHeight: CGFloat = sessionMode == .interpretation ? 392 : 196
+        let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.isMovableByWindowBackground = true
         panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        if let frame { panel.setFrame(frame, display: false) }
-        panel.contentView = NSHostingView(rootView: LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in self?.installModel() }, changeLanguage: { [weak self] language in
+        if let frame { panel.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 620, height: panelHeight), display: false) }
+        panel.contentView = NSHostingView(rootView: CaptionTrackStack(tracks: tracks, main: makeCaptionView(model, secondary: false), microphone: { [weak self] mic in
+            self?.makeCaptionView(mic, secondary: true)
+        }))
+        self.panel = panel; panel.orderFrontRegardless()
+    }
+    private func makeCaptionView(_ model: LiveCaptionState, secondary: Bool) -> LiveCaptionView {
+        LiveCaptionView(state: model, close: { [weak self] in self?.stop() }, installModel: { [weak self] in
+            if secondary { self?.microphoneCoordinator?.installModel() } else { self?.installModel() }
+        }, changeLanguage: { [weak self] language in
             guard let self else { return }
+            if self.sessionMode == .interpretation {
+                self.start(sourceLanguage: language, audioSource: .system, preserveSession: true, mode: .interpretation); return
+            }
             if self.stream == nil { self.start(sourceLanguage: language, audioSource: model.audioSource); return }
             model.clearCurrent(); model.isCapturing = true
             let token = self.generation
@@ -546,10 +586,12 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             }
         }, changeAudioSource: { [weak self] source in
             self?.start(sourceLanguage: model.sourceLanguage, audioSource: source, preserveSession: true)
-        }))
-        self.panel = panel; panel.orderFrontRegardless()
+        }, changeSessionMode: { [weak self] mode in
+            self?.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, mode: mode)
+        }, selectedSessionMode: sessionMode, secondaryTrack: secondary)
     }
     private func endCapture() {
+        if presentsPanel { microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil }
         state?.isCapturing = false
         recognitionID = UUID(); recognitionSetupID = UUID(); renewal?.cancel(); renewal = nil
         sink.clear(); managedSpeechAudio?.stop(); managedSpeechAudio = nil
@@ -562,11 +604,25 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         if let stream { self.stream = nil; Task { try? await stream.stopCapture() } }
     }
     func stop(notify: Bool = true) {
+        microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil
         generation = UUID(); setup?.cancel(); setup = nil; endCapture()
         panel?.orderOut(nil); panel = nil; state?.reset(); state = nil
+        onModelChange?(nil)
         if notify { onStop?() }
     }
     private enum CaptionFailure: Error { case display }
+}
+
+private struct CaptionTrackStack: View {
+    @ObservedObject var tracks: CaptionTrackModels
+    let main: LiveCaptionView
+    let microphone: (LiveCaptionState) -> LiveCaptionView?
+    var body: some View {
+        VStack(spacing: 0) {
+            main
+            if let model = tracks.microphone, let view = microphone(model) { view }
+        }
+    }
 }
 
 private struct LiveCaptionView: View {
@@ -576,6 +632,9 @@ private struct LiveCaptionView: View {
     let installModel: () -> Void
     let changeLanguage: (String) -> Void
     let changeAudioSource: (CaptionAudioSource) -> Void
+    var changeSessionMode: ((CaptionSessionMode) -> Void)? = nil
+    var selectedSessionMode: CaptionSessionMode = .captions
+    var secondaryTrack = false
     @State private var configuration: TranslationSession.Configuration?
     @State private var debounce: Task<Void, Never>?
     @State private var translationInFlight = false
@@ -605,12 +664,24 @@ private struct LiveCaptionView: View {
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer()
                 if state.needsSpeechModel { Button("重试", action: installModel).buttonStyle(.plain).font(.system(size: 11, weight: .medium)).help("重试语音资源") }
-                Menu {
-                    ForEach(CaptionAudioSource.allCases, id: \.self) { source in
-                        Button(source.label) { if source != state.audioSource { changeAudioSource(source) } }
-                    }
-                } label: { HStack(spacing: 4) { Text(state.audioSource.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择声音来源")
+                if secondaryTrack {
+                    Text("麦克风").foregroundStyle(.secondary)
+                } else if let changeSessionMode {
+                    Menu {
+                        ForEach(CaptionSessionMode.allCases, id: \.self) { mode in
+                            Button(mode.label) { if mode != selectedSessionMode { changeSessionMode(mode) } }
+                        }
+                    } label: { HStack(spacing: 4) { Text(selectedSessionMode.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择字幕模式")
+                } else {
+                    Menu {
+                        ForEach(CaptionAudioSource.allCases, id: \.self) { source in
+                            Button(source.label) { if source != state.audioSource { changeAudioSource(source) } }
+                        }
+                    } label: { HStack(spacing: 4) { Text(state.audioSource.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择声音来源")
+                }
+                if !secondaryTrack {
                 Menu {
                     Picker("语音语言", selection: $state.sourceLanguage) { Text("英语").tag("en-US"); Text("中文").tag("zh-CN"); Text("日语").tag("ja-JP"); Text("韩语").tag("ko-KR") }
                 } label: { HStack(spacing: 4) { Text(languageName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
@@ -622,6 +693,7 @@ private struct LiveCaptionView: View {
                 Button { state.showHistory.toggle() } label: { Image(systemName: "clock.arrow.circlepath").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(state.showHistory ? Color.accentColor : Color.secondary).help("字幕记录").accessibilityLabel("字幕记录")
                 Button { state.fontSize = state.fontSize >= 29 ? 19 : state.fontSize + 2 } label: { Image(systemName: "textformat.size").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("调整字号").accessibilityLabel("调整字号")
                 Button(action: close) { Image(systemName: "xmark").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("停止字幕").accessibilityLabel("停止字幕")
+                }
             }
             .font(.system(size: 11, weight: .medium))
             .frame(height: 26)
