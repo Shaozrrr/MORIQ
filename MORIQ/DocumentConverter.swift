@@ -654,9 +654,30 @@ struct DocumentConverter {
         guard let p = properties(styleString), required.isSubset(of: Set(p.keys)), Set(p.keys).isSubset(of: required.union(["background-position"])),
               p["margin"] == "0", p["padding"] == "0", p["background-repeat"] == "no-repeat",
               let size = p["background-size"]?.lowercased(), ["100% 100%", "cover"].contains(size),
-              (size != "cover" || ["center", "center center", "50% 50%"].contains(p["background-position"]?.lowercased() ?? "")),
               (size == "cover" || p["background-position"] == nil),
               let imageCSS = p["background-image"], imageCSS.lowercased().hasPrefix("url("), imageCSS.hasSuffix(")") else { return nil }
+        // Restrict support to unambiguous CSS positions.  Unsupported forms
+        // fall back to the ordinary converter rather than silently centering.
+        let position = (p["background-position"] ?? "center").lowercased().split(whereSeparator: { $0.isWhitespace })
+        func percent(_ value: Substring) -> Double? {
+            guard value.hasSuffix("%"), let n = Double(value.dropLast()), n.isFinite, (0...100).contains(n) else { return nil }
+            return n / 100
+        }
+        func axis(_ value: Substring, horizontal: Bool) -> Double? {
+            if value == "center" { return 0.5 }
+            if horizontal && value == "left" || !horizontal && value == "top" { return 0 }
+            if horizontal && value == "right" || !horizontal && value == "bottom" { return 1 }
+            return percent(value)
+        }
+        var positionX = 0.5, positionY = 0.5
+        if size == "cover" {
+            if position.count == 1, let x = axis(position[0], horizontal: true) { positionX = x }
+            else if position.count == 1, let y = axis(position[0], horizontal: false) { positionY = y }
+            else if position.count == 2, let x = axis(position[0], horizontal: true), let y = axis(position[1], horizontal: false) { positionX = x; positionY = y }
+            else { return nil }
+            // Vertical cropping needs cross-reader verification before enabling.
+            guard positionY == 0.5 else { return nil }
+        }
         func dimension(_ key:String) -> Double? {
             guard let raw = p[key], raw.hasSuffix("px"), let n = Double(raw.dropLast(2)), n.isFinite else { return nil }; return n
         }
@@ -680,7 +701,8 @@ struct DocumentConverter {
                                       space:CGColorSpaceCreateDeviceRGB(), bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { throw DocumentConversionError.failed }
             let scale = max(width / Double(original.width), height / Double(original.height))
             let w = Double(original.width) * scale, h = Double(original.height) * scale
-            ctx.draw(original,in:CGRect(x:(width-w)/2,y:(height-h)/2,width:w,height:h))
+            // Core Graphics uses a bottom-left origin; CSS positions use top-left.
+            ctx.draw(original,in:CGRect(x:(width-w)*positionX,y:(height-h)*(1-positionY),width:w,height:h))
             guard let rendered = ctx.makeImage() else { throw DocumentConversionError.failed }
             image = rendered
         }

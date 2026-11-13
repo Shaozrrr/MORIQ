@@ -15,6 +15,14 @@ enum CaptionAudioSource: String, CaseIterable {
     }
 }
 
+enum CaptionMicrophoneDeviceDecision { case unchanged, changed, unavailable }
+enum CaptionMicrophoneDevicePolicy {
+    static func decide(configured: String, current: String?) -> CaptionMicrophoneDeviceDecision {
+        guard let current, !current.isEmpty else { return .unavailable }
+        return current == configured ? .unchanged : .changed
+    }
+}
+
 struct CaptionHistoryEntry: Identifiable {
     let id: UUID
     let original: String
@@ -129,7 +137,8 @@ private final class LiveCaptionAudioSink: NSObject, SCStreamOutput, @unchecked S
     private var analyzerHandler: (@Sendable (CMSampleBuffer) -> Void)?
     private var whisperHandler: (@Sendable (CMSampleBuffer) -> Void)?
     private var audioSource: CaptionAudioSource = .system
-    func selectSource(_ source: CaptionAudioSource) { lock.lock(); audioSource = source; lock.unlock() }
+    private weak var activeStream: SCStream?
+    func selectSource(_ source: CaptionAudioSource, stream: SCStream) { lock.lock(); audioSource = source; activeStream = stream; lock.unlock() }
     func setWhisper(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) { lock.lock(); whisperHandler = handler; lock.unlock() }
     func setAnalyzer(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) { lock.lock(); analyzerHandler = handler; lock.unlock() }
     private var recent: [(CMSampleBuffer, Double)] = []
@@ -140,11 +149,11 @@ private final class LiveCaptionAudioSink: NSObject, SCStreamOutput, @unchecked S
         self.request = request
         if replay, let request { for (sample, _) in recent { request.appendAudioSampleBuffer(sample) } }
     }
-    func clear() { lock.lock(); request = nil; analyzerHandler = nil; whisperHandler = nil; recent.removeAll(); recentDuration = 0; lock.unlock() }
+    func clear() { lock.lock(); activeStream = nil; request = nil; analyzerHandler = nil; whisperHandler = nil; recent.removeAll(); recentDuration = 0; lock.unlock() }
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
         guard sample.isValid else { return }
         lock.lock(); defer { lock.unlock() }
-        guard audioSource.accepts(type) else { return }
+        guard activeStream === stream, audioSource.accepts(type) else { return }
         let duration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample))
         let seconds = duration.isFinite && duration > 0 ? min(duration, 1) : 0.05
         recent.append((sample, seconds)); recentDuration += seconds
@@ -237,6 +246,13 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 guard await AVCaptureDevice.requestAccess(for: .audio) else { model.status = "请先在系统设置中允许麦克风访问。"; return }
                 guard !Task.isCancelled, self.generation == id else { return }
             }
+            let microphoneID: String?
+            if audioSource == .microphone {
+                guard let id = AVCaptureDevice.default(for: .audio)?.uniqueID, !id.isEmpty else {
+                    model.status = "没有可用的麦克风，请检查系统输入设备后重试。"; return
+                }
+                microphoneID = id
+            } else { microphoneID = nil }
             guard await self.installRecognition(language: model.sourceLanguage, generation: id) else { return }
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -244,10 +260,13 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 guard let display = content.displays.first else { throw CaptionFailure.display }
                 let config = SCStreamConfiguration(); config.capturesAudio = audioSource == .system; config.excludesCurrentProcessAudio = true
                 config.width = 2; config.height = 2; config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-                if #available(macOS 15.0, *) { config.captureMicrophone = audioSource == .microphone }
+                if #available(macOS 15.0, *) {
+                    config.captureMicrophone = audioSource == .microphone
+                    if let microphoneID { config.microphoneCaptureDeviceID = microphoneID }
+                }
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let stream = SCStream(filter: filter, configuration: config, delegate: self)
-                self.sink.selectSource(audioSource)
+                self.sink.selectSource(audioSource, stream: stream)
                 try stream.addStreamOutput(self.sink, type: audioSource == .system ? .audio : .microphone, sampleHandlerQueue: DispatchQueue(label: "local.moriq.captions.audio", qos: .userInitiated))
                 self.stream = stream
                 try await stream.startCapture()
@@ -265,6 +284,15 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                         }
                         if audioSource == .microphone && AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
                             self.endCapture(); model.status = "麦克风权限已撤销，字幕已停止。"; return
+                        }
+                        if let microphoneID {
+                            switch CaptionMicrophoneDevicePolicy.decide(configured: microphoneID, current: AVCaptureDevice.default(for: .audio)?.uniqueID) {
+                            case .unchanged: break
+                            case .changed:
+                                self.start(sourceLanguage: model.sourceLanguage, audioSource: .microphone, preserveSession: true); return
+                            case .unavailable:
+                                self.endCapture(); model.status = "麦克风已断开，请检查系统输入设备后重试。"; return
+                            }
                         }
                         elapsed += 1
                         if elapsed >= 45 { elapsed = 0; if self.analyzerBridge == nil && self.whisper == nil && self.managedSpeechStream == nil { _ = await self.installRecognition(language: model.sourceLanguage, generation: id) } }

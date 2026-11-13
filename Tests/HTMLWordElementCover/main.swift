@@ -30,6 +30,23 @@ let left=rgb(10), mid=rgb(100), right=rgb(190)
 precondition(left.0>200 && mid.1>200 && right.2>200,"cover crop incorrect")
 free(pixels)
 precondition((try! String(contentsOf:src,encoding:.utf8))==html)
+// An off-centre CSS position must crop the appropriate part of the image.
+let rightSrc = root.appendingPathComponent("right.html")
+let rightHTML = html.replacingOccurrences(of:"background-position:center",with:"background-position:right center")
+try rightHTML.write(to:rightSrc,atomically:true,encoding:.utf8)
+let rightResult = try DocumentConverter().convert(input:rightSrc,outputDirectory:root,format:UTType(filenameExtension:"docx")!)
+let extract = Process(); extract.executableURL = URL(fileURLWithPath:"/usr/bin/unzip")
+extract.arguments = ["-p",rightResult.path,"word/media/moriq-page-background.png"]
+let rightPipe = Pipe(); extract.standardOutput = rightPipe; try extract.run()
+let rightData = rightPipe.fileHandleForReading.readDataToEndOfFile(); extract.waitUntilExit(); precondition(extract.terminationStatus == 0)
+let rightImage = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithData(rightData as CFData,nil)!,0,nil)!
+let rightPixels = calloc(200*100,4)!
+let rightContext = CGContext(data:rightPixels,width:200,height:100,bitsPerComponent:8,bytesPerRow:800,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
+rightContext.draw(rightImage,in:CGRect(x:0,y:0,width:200,height:100))
+let q = rightPixels.assumingMemoryBound(to:UInt8.self)
+let l = (50*200+10)*4, r = (50*200+190)*4
+precondition(q[l+1]>200 && q[l]<50 && q[r+2]>200,"right cover crop incorrect")
+free(rightPixels)
 let pdfURL = try DocumentConverter().convert(input:result,outputDirectory:root,format:.pdf)
 let pdf = PDFDocument(url:pdfURL)!
 precondition(pdf.string?.contains("你好世界") == true, "CJK text missing from PDF")
