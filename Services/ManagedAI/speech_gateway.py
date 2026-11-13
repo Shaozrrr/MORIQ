@@ -150,15 +150,29 @@ class SpeechGateway:
                             else: raise ValueError('invalid client message')
                     async def download():
                         segments = {'source': 0, 'translation': 0}
+                        segment_metadata = {'source': {}, 'translation': {}}
+                        def metadata(data):
+                            result = {}
+                            for number, name in ((5, 'start_ms'), (6, 'end_ms')):
+                                if number in data:
+                                    value = data[number]
+                                    if not isinstance(value, int) or not 0 <= value <= 2_147_483_647: raise ValueError('invalid timing')
+                                    result[name] = value
+                            if 7 in data:
+                                if data[7] not in (0, 1): raise ValueError('invalid speaker change')
+                                result['speaker_changed'] = bool(data[7])
+                            return result
                         async for message in upstream:
                             data = parse(message); event = data.get(2)
                             if event in (650, 653):
                                 kind = 'source' if event == 650 else 'translation'; segments[kind] += 1
+                                segment_metadata[kind] = metadata(data)
                             elif event in (651, 652, 654, 655):
                                 kind = 'source' if event in (651, 652) else 'translation'
                                 raw = data.get(4, b'')
                                 if not isinstance(raw, bytes) or len(raw) > 16000: raise ValueError('invalid text')
-                                await client.send(json.dumps({'type':kind, 'text':raw.decode('utf-8'), 'final': event in (652,655), 'segment':segments[kind]}, ensure_ascii=False))
+                                event_metadata = dict(segment_metadata[kind]); event_metadata.update(metadata(data))
+                                await client.send(json.dumps({'type':kind, 'text':raw.decode('utf-8'), 'final': event in (652,655), 'segment':segments[kind], **event_metadata}, ensure_ascii=False))
                             elif event == 152:
                                 await client.send(json.dumps({'type':'finished'})); return
                             elif event in (151,153): raise ValueError('provider failed')

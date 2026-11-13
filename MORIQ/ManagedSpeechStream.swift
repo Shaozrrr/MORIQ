@@ -7,6 +7,14 @@ struct ManagedSpeechEvent: Decodable, Sendable {
     let final: Bool?
     let segment: Int?
     let message: String?
+    var startMs: Int? = nil
+    var endMs: Int? = nil
+    var speakerChanged: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case type, text, final, segment, message
+        case startMs = "start_ms", endMs = "end_ms", speakerChanged = "speaker_changed"
+    }
 }
 
 /// Independently assemble the provider's source and translated streams.
@@ -111,6 +119,9 @@ actor ManagedSpeechStream {
                 guard ["ready", "source", "translation", "finished", "error"].contains(event.type) else { throw ManagedSpeechError.invalidResponse }
                 if event.type == "source" || event.type == "translation" {
                     guard let text = event.text, text.utf8.count <= 16000, let segment = event.segment, segment >= 0, event.final != nil else { throw ManagedSpeechError.invalidResponse }
+                    guard event.startMs.map({ (0...2_147_483_647).contains($0) }) ?? true,
+                          event.endMs.map({ (0...2_147_483_647).contains($0) }) ?? true else { throw ManagedSpeechError.invalidResponse }
+                    if let start = event.startMs, let end = event.endMs, end < start { throw ManagedSpeechError.invalidResponse }
                 }
                 if let continuation {
                     if case .dropped = continuation.yield(event) { throw ManagedSpeechError.invalidResponse }

@@ -49,6 +49,37 @@ async def test(binary):
             assert proc.returncode == 0, (out,err)
             print(out.decode().strip())
             print('PASS invalid account rejected')
+    # Preserve provider time/chg fields on text events, independently per track.
+    # Source and translated segment indices are separate and must never be
+    # used as stable speaker IDs or paired solely by equal numbers.
+    async def metadata_provider(ws):
+        await ws.recv(); await ws.send(g.field(2,150))
+        await ws.recv()
+        await ws.send(g.field(2,650) + g.field(5,100) + g.field(6,210) + g.field(7,1))
+        await ws.send(g.field(2,651) + g.field(4,'Hello'))
+        await ws.send(g.field(2,653) + g.field(5,105) + g.field(6,220) + g.field(7,0))
+        await ws.send(g.field(2,654) + g.field(4,'你好'))
+        await ws.send(g.field(2,652) + g.field(4,'Hello.') + g.field(6,240))
+        await ws.send(g.field(2,655) + g.field(4,'你好。'))
+        await ws.send(g.field(2,650))
+        await ws.send(g.field(2,651) + g.field(4,'Next'))
+        await ws.recv(); await ws.send(g.field(2,152))
+    async with serve(metadata_provider, '127.0.0.1', 0, compression=None) as upstream:
+        gateway = g.SpeechGateway('synthetic-provider-key', [hashlib.sha256(TOKEN.encode()).hexdigest()], upstream=f"ws://127.0.0.1:{upstream.sockets[0].getsockname()[1]}", testing=True)
+        async with serve(gateway.handle, '127.0.0.1', 0, compression=None) as server:
+            address = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/speech/stream"
+            async with connect(address, additional_headers={'Authorization':'Bearer '+TOKEN}, proxy=None) as ws:
+                await ws.send(json.dumps({'type':'start','source':'en','target':'zh'})); assert json.loads(await ws.recv())['type'] == 'ready'
+                await ws.send(b'\x01\x02' * 1280)
+                events = [json.loads(await asyncio.wait_for(ws.recv(), 5)) for _ in range(5)]
+                await ws.send('{"type":"finish"}'); assert json.loads(await ws.recv())['type'] == 'finished'
+    assert events[0]['speaker_changed'] is True and (events[0]['start_ms'],events[0]['end_ms']) == (100,210)
+    assert events[1]['type'] == 'translation' and events[1]['speaker_changed'] is False
+    assert events[2]['end_ms'] == 240 and events[2]['speaker_changed'] is True
+    assert events[3]['speaker_changed'] is False
+    assert events[4]['segment'] == 2 and 'speaker_changed' not in events[4] and 'start_ms' not in events[4]
+    print('PASS optional provider timing and change metadata remain track-specific')
+
     # Closing a user session must close upstream promptly rather than continue
     # streaming/charging after capture stops.
     closed = asyncio.Event()

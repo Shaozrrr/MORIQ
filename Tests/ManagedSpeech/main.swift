@@ -19,6 +19,12 @@ import Foundation
 @MainActor final class ConsentExpectation { var revoked = false }
 @main struct Check {
     static func main() async throws {
+        let decoder = JSONDecoder()
+        let changed = try decoder.decode(ManagedSpeechEvent.self, from: Data(#"{"type":"source","text":"hello","final":true,"segment":1,"start_ms":42,"end_ms":100,"speaker_changed":true}"#.utf8))
+        guard changed.startMs == 42, changed.endMs == 100, changed.speakerChanged == true else { fatalError("speaker metadata lost") }
+        let unchanged = try decoder.decode(ManagedSpeechEvent.self, from: Data(#"{"type":"source","text":"hello","final":true,"segment":1,"speaker_changed":false}"#.utf8))
+        let absent = try decoder.decode(ManagedSpeechEvent.self, from: Data(#"{"type":"source","text":"hello","final":true,"segment":1}"#.utf8))
+        guard unchanged.speakerChanged == false, absent.speakerChanged == nil else { fatalError("speaker metadata presence lost") }
         var accumulator = ManagedSpeechAccumulator()
         func event(_ type: String, _ text: String, _ final: Bool, _ segment: Int) -> ManagedSpeechEvent {
             ManagedSpeechEvent(type: type, text: text, final: final, segment: segment, message: nil)
