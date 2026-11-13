@@ -24,6 +24,10 @@ MainActor.assumeIsolated {
     precondition(store.items.count == 2 && store.items[0].text == "sk-abcdefghijklmnopqrstuvwxyz")
     put([(.string, Data("not retained".utf8)), (NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"), Data())])
     precondition(store.items.count == 2)
+    for marker in ["com.agilebits.onepassword", "net.antelle.keeweb", "de.petermaurer.TransientPasteboardType"] {
+        put([(.string, Data("not retained".utf8)), (NSPasteboard.PasteboardType(marker), Data())])
+        precondition(store.items.count == 2, "sensitive pasteboard markers must not enter history")
+    }
     let ordinary = NSPasteboardItem(); ordinary.setString("ordinary first item", forType: .string)
     let sensitive = NSPasteboardItem(); sensitive.setString("sk-abcdefghijklmnopqrstuvwxyz", forType: .string)
     board.clearContents(); board.writeObjects([ordinary, sensitive]); store.poll(); store.waitForCaptures()
