@@ -247,6 +247,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private var panel: NSPanel?
     private var state: LiveCaptionState?
     private var microphoneCoordinator: LiveCaptionsCoordinator?
+    private var retainedMicrophoneHistory: [CaptionHistoryEntry] = []
     private let tracks = CaptionTrackModels()
     private let presentsPanel: Bool
     private var sessionMode: CaptionSessionMode = .captions
@@ -261,6 +262,8 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         let selectedMode = mode ?? sessionMode
         let audioSource: CaptionAudioSource = presentsPanel ? .system : audioSource
         if preserveSession, let state, !state.original.isEmpty { state.accept(state.original, final: true) }
+        if presentsPanel && preserveSession { retainMicrophoneHistory() }
+        else if presentsPanel { retainedMicrophoneHistory.removeAll() }
         let savedHistory = preserveSession ? state?.history ?? [] : []
         let savedMode = preserveSession ? state?.mode : nil
         let savedSize = preserveSession ? state?.fontSize : nil
@@ -312,6 +315,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                     child.onModelChange = { [weak self] model in self?.tracks.microphone = model }
                     self.microphoneCoordinator = child
                     child.start(sourceLanguage: sourceLanguage, audioSource: .microphone)
+                    child.state?.restoreHistory(self.retainedMicrophoneHistory)
                 }
                 self.renewal = Task { @MainActor [weak self] in
                     var elapsed = 0
@@ -553,16 +557,21 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
     private func installModel() {
         guard let model = state else { return }
-        start(sourceLanguage: model.sourceLanguage, audioSource: model.audioSource)
+        start(sourceLanguage: model.sourceLanguage, audioSource: model.audioSource, preserveSession: true)
+    }
+    private func retainMicrophoneHistory() {
+        guard let microphone = microphoneCoordinator?.state else { return }
+        if !microphone.original.isEmpty { microphone.accept(microphone.original, final: true) }
+        retainedMicrophoneHistory = microphone.history
     }
     private func showPanel(_ model: LiveCaptionState, frame: NSRect? = nil) {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 700)
-        let panelHeight: CGFloat = sessionMode == .interpretation ? 392 : 196
+        let panelHeight: CGFloat = sessionMode == .interpretation ? 292 : 196
         let panel = NSPanel(contentRect: CGRect(x: screen.midX - 310, y: screen.minY + 70, width: 620, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true; panel.isMovableByWindowBackground = true
         panel.level = .floating; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         if let frame { panel.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 620, height: panelHeight), display: false) }
-        panel.contentView = NSHostingView(rootView: CaptionTrackStack(tracks: tracks, main: makeCaptionView(model, secondary: false), microphone: { [weak self] mic in
+        panel.contentView = NSHostingView(rootView: CaptionTrackStack(tracks: tracks, mainState: model, combined: sessionMode == .interpretation, main: makeCaptionView(model, secondary: false), microphone: { [weak self] mic in
             self?.makeCaptionView(mic, secondary: true)
         }))
         self.panel = panel; panel.orderFrontRegardless()
@@ -588,7 +597,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             self?.start(sourceLanguage: model.sourceLanguage, audioSource: source, preserveSession: true)
         }, changeSessionMode: { [weak self] mode in
             self?.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, mode: mode)
-        }, selectedSessionMode: sessionMode, secondaryTrack: secondary)
+        }, selectedSessionMode: sessionMode, secondaryTrack: secondary, embeddedTrack: sessionMode == .interpretation)
     }
     private func endCapture() {
         if presentsPanel { microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil }
@@ -605,16 +614,41 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
     func stop(notify: Bool = true) {
         microphoneCoordinator?.stop(notify: false); microphoneCoordinator = nil; tracks.microphone = nil
+        if notify { retainedMicrophoneHistory.removeAll() }
         generation = UUID(); setup?.cancel(); setup = nil; endCapture()
         panel?.orderOut(nil); panel = nil; state?.reset(); state = nil
         onModelChange?(nil)
         if notify { onStop?() }
     }
     private enum CaptionFailure: Error { case display }
+
+    #if DEBUG
+    /// Offscreen UI/lifecycle test hook. Never starts a stream or recognizer.
+    func debugOpenWithoutCapture(mode: CaptionSessionMode, preserveSession: Bool = false) {
+        if preserveSession { retainMicrophoneHistory() }
+        else { retainedMicrophoneHistory.removeAll() }
+        stop(notify: false)
+        sessionMode = mode
+        let model = LiveCaptionState(); model.audioSource = .system; state = model
+        if mode == .interpretation {
+            let child = LiveCaptionsCoordinator(presentsPanel: false)
+            let mic = LiveCaptionState(); mic.audioSource = .microphone; mic.restoreHistory(retainedMicrophoneHistory)
+            child.state = mic; microphoneCoordinator = child; tracks.microphone = mic
+        }
+        showPanel(model, frame: NSRect(x: -3000, y: -3000, width: 620, height: 196))
+    }
+    var debugHasPanel: Bool { panel != nil }
+    var debugHasMicrophoneTrack: Bool { tracks.microphone != nil }
+    var debugSessionMode: CaptionSessionMode { sessionMode }
+    func debugAcceptMicrophone(_ text: String) { microphoneCoordinator?.state?.accept(text) }
+    var debugMicrophoneHistory: [CaptionHistoryEntry] { microphoneCoordinator?.state?.history ?? [] }
+    #endif
 }
 
 private struct CaptionTrackStack: View {
     @ObservedObject var tracks: CaptionTrackModels
+    @ObservedObject var mainState: LiveCaptionState
+    let combined: Bool
     let main: LiveCaptionView
     let microphone: (LiveCaptionState) -> LiveCaptionView?
     var body: some View {
@@ -622,6 +656,26 @@ private struct CaptionTrackStack: View {
             main
             if let model = tracks.microphone, let view = microphone(model) { view }
         }
+        .frame(width: 620, height: combined ? 292 : 196, alignment: .top)
+        .background {
+            if combined { RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial) }
+        }
+        .overlay {
+            if combined {
+                RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
+                VStack(spacing: 0) {
+                    Spacer().frame(height: 146)
+                    Rectangle().fill(.primary.opacity(0.08)).frame(height: 0.5).padding(.horizontal, 20)
+                    Spacer()
+                }.allowsHitTesting(false)
+            }
+        }
+        .onReceive(tracks.$microphone) { model in
+            model?.mode = mainState.mode
+            model?.fontSize = mainState.fontSize
+        }
+        .onChange(of: mainState.mode) { _, value in tracks.microphone?.mode = value }
+        .onChange(of: mainState.fontSize) { _, value in tracks.microphone?.fontSize = value }
     }
 }
 
@@ -635,6 +689,7 @@ private struct LiveCaptionView: View {
     var changeSessionMode: ((CaptionSessionMode) -> Void)? = nil
     var selectedSessionMode: CaptionSessionMode = .captions
     var secondaryTrack = false
+    var embeddedTrack = false
     @State private var configuration: TranslationSession.Configuration?
     @State private var debounce: Task<Void, Never>?
     @State private var translationInFlight = false
@@ -778,9 +833,13 @@ private struct LiveCaptionView: View {
                 }
             }
             Spacer(minLength: 6)
-        }.padding(.horizontal, 18).padding(.vertical, 12).frame(width: 620, height: 196)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5))
+        }.padding(.horizontal, 18).padding(.vertical, 12).frame(width: 620, height: embeddedTrack ? 146 : 196)
+            .background {
+                if !embeddedTrack { RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial) }
+            }
+            .overlay {
+                if !embeddedTrack { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5) }
+            }
         .onChange(of: state.revision) { _, _ in scheduleTranslation() }
         .task(id: state.original) { await reveal(state.original, into: $visibleOriginal) }
         .task(id: state.translated) { await reveal(state.translated, into: $visibleTranslation) }
