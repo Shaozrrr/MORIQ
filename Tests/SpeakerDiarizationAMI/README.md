@@ -66,3 +66,23 @@ python3 Tests/SpeakerDiarizationAMI/score.py --events "$EVENTS_JSON" \
 ```
 
 这些结果不足以选择通用默认模型或校准人名匹配门限。保守方案仍是标为未知、允许用户纠正，先在多说话人、非 AMI、中文、重叠及真实使用设备上扩展盲测；降低阈值虽可降低漏检，也可能增加误报与混淆。
+
+## Sherpa-ONNX 离线候选对照
+
+采用 [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) 1.13.8 官方离线分离接口，pyannote segmentation 3.0 ONNX（转换模型版本 `9403a6902bb58e3d5ae8c7e77c3422de279db2e0`，SHA-256 `220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079`）和中英文 CAM++ ONNX（版本 `1a64735d2ab8c9b005101d5b0deff78c148248c0`，SHA-256 `945bcefe95672434d6ecf4c45bd0464d7e82be77d55985d0ec2f3253638110e1`）。使用默认聚类阈值 0.5、自动人数；本机 CPU 单线程，结果仍按上文人工标注、零 collar、含重叠评分。
+
+| ES2004a | 漏检 | 误报 | 混淆 | DER | 输出人数 | 离线处理耗时 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0–60 s | 7.00 s | 2.07 s | 6.91 s | 78.81% | 7（参考 3） | 1.55 s |
+| 60–120 s | 4.63 s | 1.55 s | 0 s | 14.95% | 2（参考 2） | 2.41 s |
+
+```sh
+python3 -m pip install 'sherpa-onnx==1.13.8' numpy
+python3 Tests/SpeakerDiarizationAMI/sherpa_offline.py \
+  --wav "$AMI_60S_PCM16_WAV" --segmentation "$SEGMENTATION_ONNX" \
+  --embedding "$CAMPLUS_ONNX" --source-start 0 --output "$EVENTS_JSON"
+python3 Tests/SpeakerDiarizationAMI/score.py --events "$EVENTS_JSON" \
+  --reference-rttm "$AMI_ES2004_RTTM" --md-eval "$MD_EVAL"
+```
+
+第二段使用对应截取的 60 秒 WAV 和 `--source-start 60`。模型来源分别为 [segmentation ONNX](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0) 和 [CAM++ ONNX](https://huggingface.co/echo-hello/speech_campplus_sv_zh_en_16k-common_advanced-onnx)；第三方 ONNX 转换与发行许可需要单独审计。以上是离线实验，耗时不代表流式延迟；样本有限，也未验证中文带人工说话人标注的录音、其他设备或姓名识别。第一段过度分裂，不足以作为直接替换当前实现的依据。
