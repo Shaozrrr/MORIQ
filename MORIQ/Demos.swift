@@ -79,11 +79,11 @@ struct DemoView: View {
     }
     private var captions: some View {
         VStack(spacing: 10) {
-            Text("正在播放 · 产品介绍").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("系统声音 · 可切换麦克风").font(.system(size: 11)).foregroundStyle(.secondary)
             Image(systemName: "play.rectangle.fill").font(.system(size: 50)).foregroundStyle(blue.opacity(0.7))
             Spacer().frame(height: 18)
             VStack(spacing: 5) {
-                Text(state.stage >= 2 ? "Let's make everyday work feel effortless." : "Listening to system audio…")
+                Text(state.stage >= 2 ? "Let's make everyday work feel effortless." : "正在聆听…")
                 if state.stage >= 3 { Text("让每一天的操作都更轻松。 ").foregroundStyle(.secondary) }
             }.font(.system(size: 14, weight: .medium)).padding(14)
              .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
