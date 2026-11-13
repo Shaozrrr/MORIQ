@@ -4,11 +4,11 @@ MORIQ 是 macOS 应用，需要 Xcode、macOS SDK 和 macOS 15 或以上版本�
 
 ## 获取构建依赖
 
-`Vendor` 中部分体积较大的预编译运行组件单独分发：下载同一发行版本的 `MORIQ-runtime.tar.gz.part-aa`、`MORIQ-runtime.tar.gz.part-ab` 和 `SHA256SUMS-runtime.txt`，将它们放在同一文件夹，并在终端验证与解压：
+`Vendor` 中部分体积较大的预编译运行组件单独分发：下载同一发行版本的 所有 `MORIQ-runtime-v2.tar.gz.part-*` 分卷和 `SHA256SUMS-runtime-v2.txt`，将它们放在同一文件夹，并在终端验证与解压：
 
 ```sh
-shasum -a 256 -c SHA256SUMS-runtime.txt
-cat MORIQ-runtime.tar.gz.part-* | tar -xz -C /path/to/MORIQ
+shasum -a 256 -c SHA256SUMS-runtime-v2.txt
+cat MORIQ-runtime-v2.tar.gz.part-* | tar -xz -C /path/to/MORIQ
 ```
 
 最后一行的 `/path/to/MORIQ` 替换为本仓库的本地目录。归档会把 `Vendor/` 中的运行组件放回仓库对应位置；确认文件来源和目标目录后再执行。发行资源尚未公开上传，此步骤目前只是准备说明。

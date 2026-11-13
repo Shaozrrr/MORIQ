@@ -3,6 +3,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(root/'Services/ManagedAI'))
 from account_store import AccountStore
+from session_issuer import SessionIssuer
 from test_server import Upstream, gateway
 from http.server import ThreadingHTTPServer
 import threading
@@ -12,7 +13,7 @@ HASH=hashlib.sha256(TOKEN.encode()).hexdigest()
 class Tests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory(); self.file=os.path.join(self.temp.name,'accounts.db'); self.now=1780000000.0
-  self.store=AccountStore(self.file,clock=lambda:self.now); self.store.put_account('a',5); self.store.add_session('a',HASH,self.now+3600)
+  self.store=AccountStore(self.file,clock=lambda:self.now); self.store.put_global_limits(1000, 1000); self.store.put_account('a',5); self.store.add_session('a',HASH,self.now+3600)
  def tearDown(self):self.temp.cleanup()
  def test_session_expiry_revocation_and_private_database(self):
   self.assertEqual(os.stat(self.file).st_mode & 0o777,0o600)
@@ -50,6 +51,31 @@ class Tests(unittest.TestCase):
   with self.assertRaises(ValueError):AccountStore(self.file)
   with self.assertRaises(ValueError):self.store.put_account('a',0)
   with self.assertRaises(ValueError):self.store.add_session('a','token-as-plaintext',self.now+10)
+ def test_global_budget_denies_by_default_and_across_accounts(self):
+  new=AccountStore(os.path.join(self.temp.name,'unset.db'),clock=lambda:self.now)
+  new.put_account('a',5); new.add_session('a',HASH,self.now+3600)
+  first=new.authenticate(HASH)
+  self.assertFalse(new.consume(first))
+  self.assertFalse(new.consume_speech(first,1))
+  new.put_global_limits(1,1); new.put_speech_limit('a',5)
+  second_hash=hashlib.sha256(b'another-synthetic-session').hexdigest()
+  new.put_account('b',5); new.put_speech_limit('b',5); new.add_session('b',second_hash,self.now+3600)
+  second=new.authenticate(second_hash)
+  with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+   results=list(pool.map(new.consume,[first,second]))
+  self.assertEqual(sum(results),1)
+  with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+   seconds=list(pool.map(lambda s:new.consume_speech(s,1),[first,second]))
+  self.assertEqual(sum(seconds),1)
+ def test_session_issuer_persists_only_hash_and_revokes(self):
+  issuer=SessionIssuer(self.store)
+  token=issuer.issue('a',60)
+  self.assertIsNotNone(self.store.authenticate(hashlib.sha256(token.encode()).hexdigest()))
+  self.assertNotIn(token.encode(),Path(self.file).read_bytes())
+  self.assertTrue(issuer.revoke(token)); self.assertFalse(issuer.revoke(token))
+  self.assertIsNone(self.store.authenticate(hashlib.sha256(token.encode()).hexdigest()))
+  with self.assertRaises(ValueError): issuer.issue('a',59)
+  with self.assertRaises(sqlite3.IntegrityError): issuer.issue('unknown',60)
  def test_local_gateway_enforces_expiry_revocation_quota(self):
   upstream=ThreadingHTTPServer(('127.0.0.1',0),Upstream); threading.Thread(target=upstream.serve_forever,daemon=True).start()
   state=gateway.Gateway(f'http://127.0.0.1:{upstream.server_port}/chat','test-model','test-key',account_store=self.store,test_mode=True)

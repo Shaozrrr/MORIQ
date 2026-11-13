@@ -49,6 +49,15 @@ class AccountStore:
                     account_id TEXT NOT NULL REFERENCES accounts(account_id), day TEXT NOT NULL,
                     seconds INTEGER NOT NULL CHECK(seconds >= 0), PRIMARY KEY(account_id, day)
                 );
+                CREATE TABLE IF NOT EXISTS global_limits (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    daily_requests INTEGER NOT NULL CHECK(daily_requests > 0),
+                    daily_speech_seconds INTEGER NOT NULL CHECK(daily_speech_seconds > 0)
+                );
+                CREATE TABLE IF NOT EXISTS global_usage (
+                    day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0 CHECK(requests >= 0),
+                    speech_seconds INTEGER NOT NULL DEFAULT 0 CHECK(speech_seconds >= 0)
+                );
             ''')
     @contextmanager
     def _connection(self):
@@ -76,6 +85,11 @@ class AccountStore:
         if isinstance(daily_seconds,bool) or not isinstance(daily_seconds,int) or not 1 <= daily_seconds <= 86400: raise ValueError('invalid speech limit')
         with self._connection() as db:
             db.execute('INSERT INTO speech_limits(account_id,daily_seconds) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET daily_seconds=excluded.daily_seconds',(account,daily_seconds))
+    def put_global_limits(self, daily_requests, daily_speech_seconds):
+        if any(isinstance(v,bool) or not isinstance(v,int) or not 1 <= v <= 100_000_000 for v in (daily_requests,daily_speech_seconds)):
+            raise ValueError('invalid global limits')
+        with self._connection() as db:
+            db.execute('INSERT INTO global_limits(singleton,daily_requests,daily_speech_seconds) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET daily_requests=excluded.daily_requests,daily_speech_seconds=excluded.daily_speech_seconds',(daily_requests,daily_speech_seconds))
     def revoke(self, token_hash):
         if not isinstance(token_hash,str) or not _HASH.fullmatch(token_hash): raise ValueError('invalid token hash')
         with self._connection() as db:
@@ -96,9 +110,12 @@ class AccountStore:
                 if not account:
                     db.execute('ROLLBACK'); return False
                 count = db.execute('SELECT requests FROM daily_usage WHERE account_id=? AND day=?',(session.account,day)).fetchone()
-                if count and count[0] >= account[0]:
+                global_limit = db.execute('SELECT daily_requests FROM global_limits WHERE singleton=1').fetchone()
+                global_used = db.execute('SELECT requests FROM global_usage WHERE day=?',(day,)).fetchone()
+                if not global_limit or (global_used and global_used[0] >= global_limit[0]) or (count and count[0] >= account[0]):
                     db.execute('ROLLBACK'); return False
                 db.execute('INSERT INTO daily_usage(account_id,day,requests) VALUES(?,?,1) ON CONFLICT(account_id,day) DO UPDATE SET requests=requests+1',(session.account,day))
+                db.execute('INSERT INTO global_usage(day,requests,speech_seconds) VALUES(?,1,0) ON CONFLICT(day) DO UPDATE SET requests=requests+1',(day,))
                 db.execute('COMMIT'); return True
             except BaseException:
                 if db.in_transaction: db.execute('ROLLBACK')
@@ -113,9 +130,12 @@ class AccountStore:
                 db.execute('BEGIN IMMEDIATE')
                 row = db.execute('SELECT l.daily_seconds FROM speech_limits l JOIN sessions s ON s.account_id=l.account_id WHERE s.account_id=? AND s.token_hash=? AND s.revoked=0 AND s.expires_at>?',(session.account,session.token_hash,now)).fetchone()
                 used = db.execute('SELECT seconds FROM speech_usage WHERE account_id=? AND day=?',(session.account,day)).fetchone()
-                if not row or (used[0] if used else 0) + seconds > row[0]:
+                global_limit = db.execute('SELECT daily_speech_seconds FROM global_limits WHERE singleton=1').fetchone()
+                global_used = db.execute('SELECT speech_seconds FROM global_usage WHERE day=?',(day,)).fetchone()
+                if not row or not global_limit or (global_used[0] if global_used else 0) + seconds > global_limit[0] or (used[0] if used else 0) + seconds > row[0]:
                     db.execute('ROLLBACK'); return False
                 db.execute('INSERT INTO speech_usage(account_id,day,seconds) VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET seconds=seconds+excluded.seconds',(session.account,day,seconds))
+                db.execute('INSERT INTO global_usage(day,requests,speech_seconds) VALUES(?,0,?) ON CONFLICT(day) DO UPDATE SET speech_seconds=speech_seconds+excluded.speech_seconds',(day,seconds))
                 db.execute('COMMIT'); return True
             except BaseException:
                 if db.in_transaction: db.execute('ROLLBACK')

@@ -75,6 +75,7 @@ async def test(binary):
     # must terminate an active stream without waiting for another audio packet.
     with tempfile.TemporaryDirectory() as tmp:
         store = AccountStore(pathlib.Path(tmp) / 'accounts.sqlite')
+        store.put_global_limits(100, 100)
         digest = hashlib.sha256(TOKEN.encode()).hexdigest()
         store.put_account('caption-user', 1)
         store.add_session('caption-user', digest, time.time() + 60)
@@ -112,6 +113,7 @@ async def test(binary):
     with tempfile.TemporaryDirectory() as tmp:
         clock = [time.time()]
         store = AccountStore(pathlib.Path(tmp) / 'accounts.sqlite', clock=lambda: clock[0])
+        store.put_global_limits(100, 100)
         digest = hashlib.sha256(TOKEN.encode()).hexdigest()
         store.put_account('expiring-user', 2)
         store.add_session('expiring-user', digest, clock[0] + 10)
@@ -135,6 +137,7 @@ async def test(binary):
 
     with tempfile.TemporaryDirectory() as tmp:
         store = AccountStore(pathlib.Path(tmp) / 'accounts.sqlite')
+        store.put_global_limits(100, 100)
         digest = hashlib.sha256(TOKEN.encode()).hexdigest()
         store.put_account('limited-user', 2)
         store.put_speech_limit('limited-user', 1)
@@ -164,6 +167,7 @@ async def test(binary):
     with tempfile.TemporaryDirectory() as tmp:
         db_path = pathlib.Path(tmp) / 'accounts.sqlite'
         store = AccountStore(db_path)
+        store.put_global_limits(100, 100)
         digest = hashlib.sha256(TOKEN.encode()).hexdigest()
         store.put_account('concurrent-user', 3)
         store.put_speech_limit('concurrent-user', 1)
