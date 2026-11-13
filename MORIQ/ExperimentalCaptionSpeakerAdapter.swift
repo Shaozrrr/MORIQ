@@ -39,13 +39,18 @@ final class ExperimentalCaptionSpeakerAdapter: @unchecked Sendable {
                      onError: @escaping @Sendable (String) -> Void,
                      onAcceptedSamples: @escaping @Sendable (Int64) -> Void = { _ in }) throws -> ExperimentalCaptionSpeakerAdapter? {
         guard environment["MORIQ_EXPERIMENTAL_SPEAKER"] == "1" else { return nil }
-        guard language == "en" || language.hasPrefix("en-") else { throw SetupError.unsupportedLanguage }
+        // Mandarin token spans are validated experimentally; Japanese and
+        // Korean stay disabled until tested with real speech. The helper's
+        // language argument is the Whisper base code, not a BCP-47 locale.
+        let code = language.lowercased().split(separator: "-", omittingEmptySubsequences: false)
+        guard !code.isEmpty, !code.contains(where: { $0.isEmpty }),
+              let base = code.first, base == "en" || base == "zh" else { throw SetupError.unsupportedLanguage }
         guard FileManager.default.isExecutableFile(atPath: whisperHelper.path),
               FileManager.default.isExecutableFile(atPath: speakerHelper.path),
               FileManager.default.fileExists(atPath: whisperModel.path),
               FileManager.default.fileExists(atPath: speakerModel.path) else { throw SetupError.invalidPaths }
         return try ExperimentalCaptionSpeakerAdapter(whisperHelper: whisperHelper, whisperModel: whisperModel,
-            speakerHelper: speakerHelper, speakerModel: speakerModel, language: language,
+            speakerHelper: speakerHelper, speakerModel: speakerModel, language: String(base),
             minimumCoverage: minimumCoverage, maximumCompetition: maximumCompetition,
             onText: onText, onUpdate: onUpdate, onError: onError, onAcceptedSamples: onAcceptedSamples)
     }

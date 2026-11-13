@@ -25,8 +25,10 @@ func create(_ env: [String: String], _ language: String) throws -> ExperimentalC
 }
 let disabled = try create([:], "en")
 precondition(disabled == nil, "opt in is required")
-do { _ = try create(["MORIQ_EXPERIMENTAL_SPEAKER": "1"], "zh"); fatalError("unsupported language accepted") }
-catch ExperimentalCaptionSpeakerAdapter.SetupError.unsupportedLanguage { }
+for language in ["ja", "ko", "zh-", "fr"] {
+    do { _ = try create(["MORIQ_EXPERIMENTAL_SPEAKER": "1"], language); fatalError("unsupported language accepted") }
+    catch ExperimentalCaptionSpeakerAdapter.SetupError.unsupportedLanguage { }
+}
 guard let adapter = try create(["MORIQ_EXPERIMENTAL_SPEAKER": "1"], "en") else { fatalError("missing adapter") }
 for offset in stride(from: 0, to: audio.count, by: 12800) {
     adapter.appendTestPCM(audio.subdata(in: offset..<min(offset + 12800, audio.count)))
@@ -49,4 +51,4 @@ let assigned = final.flatMap(\.words).filter { $0.speakerID != nil }.count
 let speakerCount = Set(final.flatMap { $0.words.compactMap(\.speakerID) }).count
 precondition(snap.2.isEmpty && assigned > 0 && speakerCount >= 2)
 adapter.stop()
-print("PASS explicit debug opt-in, English-only adapter, real ASR and diarization: samples=\(snap.1), assigned=\(assigned), speakers=\(speakerCount)")
+print("PASS explicit debug opt-in, unsupported languages rejected, English real ASR and diarization: samples=\(snap.1), assigned=\(assigned), speakers=\(speakerCount)")
