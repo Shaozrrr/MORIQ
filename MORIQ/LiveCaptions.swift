@@ -37,6 +37,7 @@ struct CaptionHistoryEntry: Identifiable {
     let id: UUID
     let original: String
     let sourceLanguage: String
+    let targetLanguage: String
     var translated: String
 }
 
@@ -49,6 +50,9 @@ struct CaptionHistoryEntry: Identifiable {
     @Published var status = "准备中"
     @Published var mode = "bilingual" { didSet { if mode != oldValue { if !managedSpeech { translated = "" }; revision = UUID() } } }
     @Published var sourceLanguage = "en-US"
+    @Published var targetLanguage = "zh-Hans" {
+        didSet { if targetLanguage != oldValue { translated = ""; translatedForOriginal = ""; revision = UUID() } }
+    }
     @Published var audioSource: CaptionAudioSource = .system
     @Published var fontSize: Double = 23
     @Published var showHistory = false
@@ -57,6 +61,41 @@ struct CaptionHistoryEntry: Identifiable {
     /// Independent provider streams are intentionally not paired into history.
     @Published var managedSpeech = false
     @Published private(set) var history: [CaptionHistoryEntry] = []
+    #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+    @Published private(set) var experimentalAttribution: [String] = []
+    @Published var experimentalSpeakerEnabled = false
+    private var experimentalWindows: [Int64: [(String, String)]] = [:]
+    private var experimentalNames = CaptionSpeakerNames()
+    func clearExperimentalAttribution() { experimentalAttribution = []; experimentalWindows.removeAll(); experimentalNames = CaptionSpeakerNames() }
+    func acceptExperimentalAttribution(_ value: CaptionAttributedWindow) {
+        guard value.window.isFinal else { return }
+        let session = experimentalNames.sessionID
+        var lines: [(String, String)] = []
+        for word in value.words {
+            let id = value.diarizationAvailable ? word.speakerID : nil
+            if let id { _ = experimentalNames.observe(id, session: session) }
+            let label = experimentalNames.displayName(for: id, session: session)
+            if lines.last?.0 == label { lines[lines.count - 1].1 += word.word.text }
+            else { lines.append((label, word.word.text)) }
+        }
+        experimentalWindows[value.window.startSample] = lines
+        if experimentalWindows.count > 30 { for key in experimentalWindows.keys.sorted().prefix(experimentalWindows.count - 30) { experimentalWindows.removeValue(forKey: key) } }
+        var combined: [(String, String)] = []
+        for key in experimentalWindows.keys.sorted() {
+            for (label, text) in experimentalWindows[key] ?? [] {
+                if combined.last?.0 == label {
+                    // A new rolling window may start without a leading space.
+                    // Add one only between adjacent ASCII word characters;
+                    // never insert it between CJK characters or punctuation.
+                    let left = combined[combined.count - 1].1.last, right = text.first
+                    if let left, let right, left.isASCII && right.isASCII && left.isLetter && right.isLetter { combined[combined.count - 1].1 += " " }
+                    combined[combined.count - 1].1 += text
+                } else { combined.append((label, text)) }
+            }
+        }
+        experimentalAttribution = combined.map { "\($0.0)：\($0.1.trimmingCharacters(in: .whitespacesAndNewlines))" }
+    }
+    #endif
     private var translatedForOriginal = ""
     private var managedSourceSegment: Int?
     private var stableTranslationText = ""
@@ -114,7 +153,7 @@ struct CaptionHistoryEntry: Identifiable {
         }
         if bounded != original { original = bounded; lastRecognitionUpdate = Date(); revision = UUID() }
         if final && !bounded.isEmpty && history.last?.id != segmentID {
-            history.append(CaptionHistoryEntry(id: segmentID, original: bounded, sourceLanguage: sourceLanguage, translated: translatedForOriginal == bounded ? translated : ""))
+            history.append(CaptionHistoryEntry(id: segmentID, original: bounded, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage, translated: translatedForOriginal == bounded ? translated : ""))
             if history.count > 30 { history.removeFirst(history.count - 30) }
         }
         if final && !bounded.isEmpty && !segmentFinalized { segmentFinalized = true; revision = UUID() }
@@ -123,6 +162,7 @@ struct CaptionHistoryEntry: Identifiable {
         guard revision == self.revision else { return }
         acceptTranslation(text, forOriginal: original)
     }
+    func clearTranslation() { translated = ""; translatedForOriginal = "" }
     func acceptManagedTranslation(_ text: String) {
         guard managedSpeech else { return }
         translated = String(text.suffix(4_000))
@@ -139,15 +179,21 @@ struct CaptionHistoryEntry: Identifiable {
     func acceptTranslation(_ text: String, forOriginal source: String) {
         acceptTranslation(text, forOriginal: source, segment: segmentID)
     }
-    func acceptTranslation(_ text: String, forOriginal source: String, segment: UUID) {
-        if let index = history.indices.last(where: { history[$0].id == segment && history[$0].original == source }) { history[index].translated = text }
-        guard segment == segmentID, !source.isEmpty, original.hasPrefix(source) else { return }
+    func acceptTranslation(_ text: String, forOriginal source: String, segment: UUID, target: String? = nil) {
+        let target = target ?? targetLanguage
+        if let index = history.indices.last(where: { history[$0].id == segment && history[$0].original == source && history[$0].targetLanguage == target }) { history[index].translated = text }
+        guard target == targetLanguage, segment == segmentID, !source.isEmpty, original.hasPrefix(source) else { return }
         if original.hasPrefix(translatedForOriginal), !translatedForOriginal.isEmpty,
            source.count < translatedForOriginal.count { return }
         translated = text
         translatedForOriginal = source
     }
-    func clearCurrent() { original = ""; translated = ""; translatedForOriginal = ""; stableTranslationText = ""; managedSourceSegment = nil; lastRecognitionUpdate = .distantPast; segmentFinalized = false; segmentID = UUID(); revision = UUID() }
+    func clearCurrent() {
+        original = ""; translated = ""; translatedForOriginal = ""; stableTranslationText = ""; managedSourceSegment = nil; lastRecognitionUpdate = .distantPast; segmentFinalized = false; segmentID = UUID(); revision = UUID()
+        #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+        clearExperimentalAttribution()
+        #endif
+    }
     func restoreHistory(_ entries: [CaptionHistoryEntry]) { history = Array(entries.suffix(30)) }
     func reset() { clearCurrent(); history.removeAll(); isCapturing = false }
 }
@@ -237,6 +283,10 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private var speechTask: SFSpeechRecognitionTask?
     private var analyzerBridge: AnyObject?
     private var whisper: LocalWhisperCaptionEngine?
+    #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+    private var experimentalSpeaker: ExperimentalCaptionSpeakerAdapter?
+    private var experimentalAcceptedSamples: Int64 = 0
+    #endif
     private var managedSpeechStream: ManagedSpeechStream?
     private var managedSpeechAudio: ManagedSpeechAudioBridge?
     private var managedSpeechEvents: Task<Void, Never>?
@@ -248,6 +298,8 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private var state: LiveCaptionState?
     private var microphoneCoordinator: LiveCaptionsCoordinator?
     private var retainedMicrophoneHistory: [CaptionHistoryEntry] = []
+    private var microphoneSourceLanguage = "zh-CN"
+    private var microphoneTargetLanguage = "en-US"
     private let tracks = CaptionTrackModels()
     private let presentsPanel: Bool
     private var sessionMode: CaptionSessionMode = .captions
@@ -258,7 +310,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     private init(presentsPanel: Bool) { self.presentsPanel = presentsPanel; super.init() }
 
     /// Called only from a user action.
-    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false, mode: CaptionSessionMode? = nil) {
+    func start(sourceLanguage: String = "en-US", audioSource: CaptionAudioSource = .system, preserveSession: Bool = false, mode: CaptionSessionMode? = nil, targetLanguage: String? = nil) {
         let selectedMode = mode ?? sessionMode
         let audioSource: CaptionAudioSource = presentsPanel ? .system : audioSource
         if preserveSession, let state, !state.original.isEmpty { state.accept(state.original, final: true) }
@@ -266,11 +318,12 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         else if presentsPanel { retainedMicrophoneHistory.removeAll() }
         let savedHistory = preserveSession ? state?.history ?? [] : []
         let savedMode = preserveSession ? state?.mode : nil
+        let savedTarget = preserveSession ? state?.targetLanguage : nil
         let savedSize = preserveSession ? state?.fontSize : nil
         let savedFrame = preserveSession ? panel?.frame : nil
         stop(notify: false)
         sessionMode = selectedMode
-        let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.audioSource = audioSource; state = model
+        let model = LiveCaptionState(); model.sourceLanguage = sourceLanguage; model.targetLanguage = targetLanguage ?? savedTarget ?? "zh-Hans"; model.audioSource = audioSource; state = model
         onModelChange?(model)
         model.restoreHistory(savedHistory)
         if let savedMode { model.mode = savedMode }; if let savedSize { model.fontSize = savedSize }
@@ -314,7 +367,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                     let child = LiveCaptionsCoordinator(presentsPanel: false)
                     child.onModelChange = { [weak self] model in self?.tracks.microphone = model }
                     self.microphoneCoordinator = child
-                    child.start(sourceLanguage: sourceLanguage, audioSource: .microphone)
+                    child.start(sourceLanguage: self.microphoneSourceLanguage, audioSource: .microphone, targetLanguage: self.microphoneTargetLanguage)
                     child.state?.restoreHistory(self.retainedMicrophoneHistory)
                 }
                 self.renewal = Task { @MainActor [weak self] in
@@ -339,7 +392,15 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                             }
                         }
                         elapsed += 1
-                        if elapsed >= 45 { elapsed = 0; if self.analyzerBridge == nil && self.whisper == nil && self.managedSpeechStream == nil { _ = await self.installRecognition(language: model.sourceLanguage, generation: id) } }
+                        if elapsed >= 45 {
+                            elapsed = 0
+                            #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+                            let experimentalActive = self.experimentalSpeaker != nil
+                            #else
+                            let experimentalActive = false
+                            #endif
+                            if self.analyzerBridge == nil && self.whisper == nil && self.managedSpeechStream == nil && !experimentalActive { _ = await self.installRecognition(language: model.sourceLanguage, generation: id) }
+                        }
                     }
                 }
             } catch {
@@ -349,8 +410,52 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             }
         }
     }
+    #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+    private func installExperimentalRecognition(language: String, generation: UUID, environment: [String: String]) -> Bool {
+        guard let model = state, presentsPanel, sessionMode == .captions, model.audioSource == .system else {
+            state?.status = "实验说话人识别仅支持单路系统声音。"; return false
+        }
+        let keys = ["MORIQ_WHISPER_HELPER", "MORIQ_WHISPER_MODEL", "MORIQ_SPEAKER_HELPER", "MORIQ_SPEAKER_MODEL"]
+        guard keys.allSatisfy({ environment[$0]?.hasPrefix("/") == true }),
+              let minimum = environment["MORIQ_SPEAKER_MINIMUM_COVERAGE"].flatMap(Double.init),
+              let maximum = environment["MORIQ_SPEAKER_MAXIMUM_COMPETITION"].flatMap(Double.init) else {
+            model.status = "实验模型路径或阈值未配置。"; return false
+        }
+        let id = UUID(); recognitionID = id; experimentalAcceptedSamples = 0
+        sink.set(nil); sink.setAnalyzer(nil); sink.setWhisper(nil)
+        whisper?.stop(); whisper = nil
+        experimentalSpeaker?.stop(); experimentalSpeaker = nil
+        do {
+            let adapter = try ExperimentalCaptionSpeakerAdapter.make(environment: environment,
+                whisperHelper: URL(fileURLWithPath: environment[keys[0]]!), whisperModel: URL(fileURLWithPath: environment[keys[1]]!),
+                speakerHelper: URL(fileURLWithPath: environment[keys[2]]!), speakerModel: URL(fileURLWithPath: environment[keys[3]]!),
+                language: language, minimumCoverage: minimum, maximumCompetition: maximum,
+                onText: { [weak self, weak model] text, final in
+                    Task { @MainActor in guard let self, let model, self.generation == generation, self.recognitionID == id, self.state === model else { return }; model.accept(text, final: final) }
+                }, onUpdate: { [weak self, weak model] update in
+                    Task { @MainActor in guard let self, let model, self.generation == generation, self.recognitionID == id, self.state === model else { return }; model.acceptExperimentalAttribution(update) }
+                }, onError: { [weak self, weak model] message in
+                    Task { @MainActor in guard let self, let model, self.generation == generation, self.recognitionID == id, self.state === model else { return }; self.endCapture(); model.status = message }
+                }, onAcceptedSamples: { [weak self] count in
+                    Task { @MainActor in guard let self, self.generation == generation, self.recognitionID == id else { return }; self.experimentalAcceptedSamples = count }
+                })
+            guard let adapter else { model.status = "实验说话人识别未启用。"; return false }
+            experimentalSpeaker = adapter
+            model.experimentalSpeakerEnabled = true
+            sink.setWhisper { [weak adapter] sample in adapter?.append(sample) }
+            return true
+        } catch {
+            model.status = "实验说话人识别启动失败，请检查本机模型、语言与阈值。"; return false
+        }
+    }
+    #endif
     private func installRecognition(language: String, generation: UUID) async -> Bool {
         let setupID = UUID(); recognitionSetupID = setupID
+        #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+        if ProcessInfo.processInfo.environment["MORIQ_EXPERIMENTAL_SPEAKER"] == "1" {
+            return installExperimentalRecognition(language: language, generation: generation, environment: ProcessInfo.processInfo.environment)
+        }
+        #endif
         // Explicit configuration is required; an invalid setup never silently
         // falls back to a local engine after the user selected managed speech.
         if let configured = Bundle.main.object(forInfoDictionaryKey: "MORIQManagedSpeechEndpoint") {
@@ -370,8 +475,9 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 model.status = "语音服务或账户尚未配置。"; return false
             }
             let source = String(language.prefix(2)).lowercased()
-            guard ["en", "ja", "ko"].contains(source) else {
-                model.status = "此语言暂不支持云端字幕翻译。"; return false
+            let target = String(model.targetLanguage.prefix(2)).lowercased()
+            guard ["en", "zh", "ja", "ko"].contains(source), ["en", "zh"].contains(target), source != target else {
+                model.status = "请选择受支持且不同的语音与翻译语言。"; return false
             }
             do {
                 sink.setWhisper(nil); managedSpeechAudio?.stop(); managedSpeechAudio = nil
@@ -379,7 +485,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 if let previous = managedSpeechStream { managedSpeechStream = nil; await previous.cancel() }
                 let remote = try ManagedSpeechStream(endpoint: endpoint, token: token)
                 managedSpeechStream = remote
-                let events = try await remote.start(source: source, target: "zh")
+                let events = try await remote.start(source: source, target: target)
                 var iterator = events.makeAsyncIterator()
                 guard let first = try await iterator.next(), first.type == "ready", self.generation == generation, self.recognitionSetupID == setupID,
                       consentKeys.allSatisfy({ UserDefaults.standard.bool(forKey: $0) }), !Task.isCancelled else {
@@ -561,6 +667,8 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
     private func retainMicrophoneHistory() {
         guard let microphone = microphoneCoordinator?.state else { return }
+        microphoneSourceLanguage = microphone.sourceLanguage
+        microphoneTargetLanguage = microphone.targetLanguage
         if !microphone.original.isEmpty { microphone.accept(microphone.original, final: true) }
         retainedMicrophoneHistory = microphone.history
     }
@@ -581,8 +689,11 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             if secondary { self?.microphoneCoordinator?.installModel() } else { self?.installModel() }
         }, changeLanguage: { [weak self] language in
             guard let self else { return }
-            if self.sessionMode == .interpretation {
-                self.start(sourceLanguage: language, audioSource: .system, preserveSession: true, mode: .interpretation); return
+            if secondary {
+                self.microphoneSourceLanguage = language
+                self.microphoneTargetLanguage = model.targetLanguage
+                self.microphoneCoordinator?.start(sourceLanguage: language, audioSource: .microphone, preserveSession: true, targetLanguage: model.targetLanguage)
+                return
             }
             if self.stream == nil { self.start(sourceLanguage: language, audioSource: model.audioSource); return }
             model.clearCurrent(); model.isCapturing = true
@@ -597,6 +708,17 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
             self?.start(sourceLanguage: model.sourceLanguage, audioSource: source, preserveSession: true)
         }, changeSessionMode: { [weak self] mode in
             self?.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, mode: mode)
+        }, changeTargetLanguage: { [weak self] target in
+            guard let self else { return }
+            if secondary { self.microphoneTargetLanguage = target }
+            // Local translation updates its own task. A managed stream has a
+            // fixed language pair, so restart only the affected audio track.
+            guard model.managedSpeech else { return }
+            if secondary {
+                self.microphoneCoordinator?.start(sourceLanguage: model.sourceLanguage, audioSource: .microphone, preserveSession: true, targetLanguage: target)
+            } else {
+                self.start(sourceLanguage: model.sourceLanguage, audioSource: .system, preserveSession: true, targetLanguage: target)
+            }
         }, selectedSessionMode: sessionMode, secondaryTrack: secondary, embeddedTrack: sessionMode == .interpretation)
     }
     private func endCapture() {
@@ -608,6 +730,11 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         managedSpeechEvents?.cancel(); managedSpeechEvents = nil
         if let remote = managedSpeechStream { managedSpeechStream = nil; Task { await remote.cancel() } }
         whisper?.stop(); whisper = nil
+        #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+        experimentalSpeaker?.stop(); experimentalSpeaker = nil
+        state?.experimentalSpeakerEnabled = false
+        state?.clearExperimentalAttribution()
+        #endif
         if #available(macOS 26.0, *), let bridge = analyzerBridge as? CaptionAnalyzerBridge { bridge.stop() }
         analyzerBridge = nil; speechRequest?.endAudio(); speechTask?.cancel(); speechRequest = nil; speechTask = nil
         if let stream { self.stream = nil; Task { try? await stream.stopCapture() } }
@@ -632,7 +759,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         let model = LiveCaptionState(); model.audioSource = .system; state = model
         if mode == .interpretation {
             let child = LiveCaptionsCoordinator(presentsPanel: false)
-            let mic = LiveCaptionState(); mic.audioSource = .microphone; mic.restoreHistory(retainedMicrophoneHistory)
+            let mic = LiveCaptionState(); mic.audioSource = .microphone; mic.sourceLanguage = microphoneSourceLanguage; mic.targetLanguage = microphoneTargetLanguage; mic.restoreHistory(retainedMicrophoneHistory)
             child.state = mic; microphoneCoordinator = child; tracks.microphone = mic
         }
         showPanel(model, frame: NSRect(x: -3000, y: -3000, width: 620, height: 196))
@@ -642,6 +769,26 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     var debugSessionMode: CaptionSessionMode { sessionMode }
     func debugAcceptMicrophone(_ text: String) { microphoneCoordinator?.state?.accept(text) }
     var debugMicrophoneHistory: [CaptionHistoryEntry] { microphoneCoordinator?.state?.history ?? [] }
+    var debugMicrophoneLanguages: (String, String)? { microphoneCoordinator?.state.map { ($0.sourceLanguage, $0.targetLanguage) } }
+    #if MORIQ_SPEAKER_EXPERIMENTAL
+    func debugStartSpeakerWithoutCapture(environment: [String: String], language: String = "en-US") -> Bool {
+        debugOpenWithoutCapture(mode: .captions)
+        state?.sourceLanguage = language
+        return installExperimentalRecognition(language: language, generation: generation, environment: environment)
+    }
+    func debugAppendSpeakerPCM(_ data: Data) { experimentalSpeaker?.appendTestPCM(data) }
+    func debugFinishSpeakerPCM() { experimentalSpeaker?.finishSpeakerInput() }
+    var debugSpeakerAttribution: [String] { state?.experimentalAttribution ?? [] }
+    var debugSpeakerAcceptedSamples: Int64 { experimentalAcceptedSamples }
+    func debugSaveSpeakerPreview(to url: URL) throws {
+        guard let view = panel?.contentView else { throw CaptionFailure.display }
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CaptionFailure.display }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { throw CaptionFailure.display }
+        try data.write(to: url)
+    }
+    #endif
     #endif
 }
 
@@ -687,6 +834,7 @@ private struct LiveCaptionView: View {
     let changeLanguage: (String) -> Void
     let changeAudioSource: (CaptionAudioSource) -> Void
     var changeSessionMode: ((CaptionSessionMode) -> Void)? = nil
+    var changeTargetLanguage: ((String) -> Void)? = nil
     var selectedSessionMode: CaptionSessionMode = .captions
     var secondaryTrack = false
     var embeddedTrack = false
@@ -695,6 +843,8 @@ private struct LiveCaptionView: View {
     @State private var translationInFlight = false
     @State private var translationSource = ""
     @State private var translationLanguage = ""
+    @State private var translationTargetLanguage = ""
+    @State private var translationRequestID = UUID()
     @State private var translationSegment = UUID()
     @State private var visibleOriginal = ""
     @State private var visibleTranslation = ""
@@ -704,8 +854,9 @@ private struct LiveCaptionView: View {
     private var languageName: String {
         switch state.sourceLanguage { case "zh-CN": return "中文"; case "ja-JP": return "日语"; case "ko-KR": return "韩语"; default: return "英语" }
     }
+    private var targetLanguageName: String { state.targetLanguage.hasPrefix("zh") ? "中文" : "英语" }
     private var modeName: String {
-        switch state.mode { case "original": return "原文"; case "zh": return "中文"; default: return "双语" }
+        switch state.mode { case "original": return "原文"; case "zh": return "译文"; default: return "双语" }
     }
     private var precedingHistory: [CaptionHistoryEntry] {
         if state.history.last?.id == state.segmentID { return Array(state.history.dropLast()) }
@@ -717,6 +868,9 @@ private struct LiveCaptionView: View {
                 Circle().fill(state.isCapturing ? Color(red: 0.18, green: 0.43, blue: 1) : Color.secondary.opacity(0.6)).frame(width: 6, height: 6)
                 Text(state.isCapturing && state.status == "正在处理系统音频 · 本机识别" ? "正在聆听" : state.status)
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+                if state.experimentalSpeakerEnabled { Text("实验").font(.system(size: 10)).foregroundStyle(.secondary) }
+                #endif
                 Spacer()
                 if state.needsSpeechModel { Button("重试", action: installModel).buttonStyle(.plain).font(.system(size: 11, weight: .medium)).help("重试语音资源") }
                 if secondaryTrack {
@@ -736,13 +890,14 @@ private struct LiveCaptionView: View {
                     } label: { HStack(spacing: 4) { Text(state.audioSource.label); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择声音来源")
                 }
-                if !secondaryTrack {
                 Menu {
                     Picker("语音语言", selection: $state.sourceLanguage) { Text("英语").tag("en-US"); Text("中文").tag("zh-CN"); Text("日语").tag("ja-JP"); Text("韩语").tag("ko-KR") }
-                } label: { HStack(spacing: 4) { Text(languageName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择语音语言").accessibilityLabel("语音语言，\(languageName)")
+                    Picker("翻译语言", selection: $state.targetLanguage) { Text("中文").tag("zh-Hans"); Text("英语").tag("en-US") }
+                } label: { HStack(spacing: 4) { Text("\(languageName) → \(targetLanguageName)"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择语音与翻译语言").accessibilityLabel("语音语言，\(languageName)，翻译语言，\(targetLanguageName)")
+                if !secondaryTrack {
                 Menu {
-                    Picker("字幕模式", selection: $state.mode) { Text("双语").tag("bilingual"); Text("原文").tag("original"); Text("中文").tag("zh") }
+                    Picker("字幕模式", selection: $state.mode) { Text("双语").tag("bilingual"); Text("原文").tag("original"); Text("译文").tag("zh") }
                 } label: { HStack(spacing: 4) { Text(modeName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择字幕模式").accessibilityLabel("字幕模式，\(modeName)")
                 Button { state.showHistory.toggle() } label: { Image(systemName: "clock.arrow.circlepath").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(state.showHistory ? Color.accentColor : Color.secondary).help("字幕记录").accessibilityLabel("字幕记录")
@@ -783,6 +938,16 @@ private struct LiveCaptionView: View {
                                     if state.mode != "zh" { Text(visibleOriginal).font(.system(size: state.fontSize, weight: .medium)).foregroundStyle(.primary) }
                                     if state.mode != "original" && !visibleTranslation.isEmpty { Text(visibleTranslation).font(.system(size: state.fontSize - 2)).foregroundStyle(.secondary) }
                                 }
+                                #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
+                                if !state.experimentalAttribution.isEmpty {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("实验：匿名归属（已确认片段）").font(.system(size: 10)).foregroundStyle(.secondary)
+                                        ForEach(Array(state.experimentalAttribution.enumerated()), id: \.offset) { _, line in
+                                            Text(line).font(.system(size: 12)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                #endif
                             }.id("current-caption")
                         }.frame(maxWidth: .infinity, minHeight: 58).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.center).textSelection(.enabled)
                     }
@@ -843,20 +1008,23 @@ private struct LiveCaptionView: View {
         .onChange(of: state.revision) { _, _ in scheduleTranslation() }
         .task(id: state.original) { await reveal(state.original, into: $visibleOriginal) }
         .task(id: state.translated) { await reveal(state.translated, into: $visibleTranslation) }
-        .onChange(of: state.sourceLanguage) { _, value in changeLanguage(value) }
+        .onChange(of: state.sourceLanguage) { _, value in changeLanguage(value); restartTranslation() }
+        .onChange(of: state.targetLanguage) { _, value in changeTargetLanguage?(value); restartTranslation() }
         .onDisappear { debounce?.cancel(); debounce = nil }
         .translationTask(configuration) { session in
             guard !state.managedSpeech else { return }
-            let source = translationSource, language = translationLanguage, segment = translationSegment
+            let source = translationSource, language = translationLanguage, target = translationTargetLanguage, segment = translationSegment, request = translationRequestID
             var completed = false
             defer {
-                translationInFlight = false
-                if completed, state.mode != "original",
-                   (state.original != source || state.segmentID != segment || state.history.contains(where: { $0.sourceLanguage == state.sourceLanguage && $0.translated.isEmpty })) { scheduleTranslation() }
+                if request == translationRequestID {
+                    translationInFlight = false
+                    if completed, state.mode != "original",
+                       (state.original != source || state.segmentID != segment || state.history.contains(where: { $0.sourceLanguage == state.sourceLanguage && $0.targetLanguage == state.targetLanguage && $0.translated.isEmpty })) { scheduleTranslation() }
+                }
             }
             guard state.mode != "original", !source.isEmpty else { return }
-            do { let result = try await session.translate(source); guard !Task.isCancelled, state.sourceLanguage == language, !result.targetText.isEmpty else { return }; state.acceptTranslation(result.targetText, forOriginal: source, segment: segment); completed = true }
-            catch { guard !Task.isCancelled, state.segmentID == segment, state.original.hasPrefix(source) else { return }; state.status = "翻译不可用，请检查系统翻译语言包。" }
+            do { let result = try await session.translate(source); guard !Task.isCancelled, request == translationRequestID, state.sourceLanguage == language, state.targetLanguage == target, !result.targetText.isEmpty else { return }; state.acceptTranslation(result.targetText, forOriginal: source, segment: segment, target: target); completed = true }
+            catch { guard !Task.isCancelled, request == translationRequestID, state.targetLanguage == target, state.segmentID == segment, state.original.hasPrefix(source) else { return }; state.status = "翻译不可用，请检查系统翻译语言包。" }
         }
     }
     @MainActor private func reveal(_ target: String, into value: Binding<String>) async {
@@ -879,31 +1047,40 @@ private struct LiveCaptionView: View {
             try? await Task.sleep(for: .milliseconds(20))
         }
     }
+    private func restartTranslation() {
+        debounce?.cancel(); debounce = nil; translationRequestID = UUID(); translationInFlight = false; configuration = nil
+        if state.isCapturing && state.status == "语音与翻译语言相同，请选择不同语言。" { state.status = "正在聆听\(state.audioSource.label)" }
+        scheduleTranslation()
+    }
     private func scheduleTranslation() {
         guard !state.managedSpeech else { return }
         guard state.mode != "original", !state.original.isEmpty else { return }
-        if state.sourceLanguage.hasPrefix("zh") { state.acceptTranslation(state.original, revision: state.revision); return }
+        if state.sourceLanguage.prefix(2).lowercased() == state.targetLanguage.prefix(2).lowercased() {
+            state.clearTranslation(); state.status = "语音与翻译语言相同，请选择不同语言。"; return
+        }
         guard debounce == nil, !translationInFlight else { return }
         debounce = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled, state.mode != "original", !state.original.isEmpty else { debounce = nil; return }
-            let language = state.sourceLanguage
-            let source = Locale.Language(identifier: language), target = Locale.Language(identifier: "zh-Hans")
+            let language = state.sourceLanguage, targetID = state.targetLanguage
+            let source = Locale.Language(identifier: language), target = Locale.Language(identifier: targetID)
             let available = await LanguageAvailability().status(from: source, to: target)
             debounce = nil
-            guard !Task.isCancelled, state.sourceLanguage == language, state.mode != "original" else { return }
+            guard !Task.isCancelled, state.sourceLanguage == language, state.targetLanguage == targetID, state.mode != "original" else { return }
             switch available {
             case .installed:
-                let pending = state.history.first(where: { $0.sourceLanguage == language && $0.translated.isEmpty })
+                let pending = state.history.first(where: { $0.sourceLanguage == language && $0.targetLanguage == targetID && $0.translated.isEmpty })
                 translationSource = pending?.original ?? state.translationSnapshot
                 guard !translationSource.isEmpty else { scheduleTranslation(); return }
                 translationLanguage = language
+                translationTargetLanguage = targetID
                 translationSegment = pending?.id ?? state.segmentID
+                translationRequestID = UUID()
                 translationInFlight = true
                 if configuration == nil { configuration = TranslationSession.Configuration(source: source, target: target) }
                 else { configuration?.source = source; configuration?.target = target; configuration?.invalidate() }
             case .supported: state.status = "请在系统设置中下载对应翻译语言包。"
-            case .unsupported: state.status = "系统不支持此语言翻译为中文。"
+            case .unsupported: state.status = "系统不支持此语言组合。"
             @unknown default: configuration = nil; state.status = "无法检查翻译语言包。"
             }
         }

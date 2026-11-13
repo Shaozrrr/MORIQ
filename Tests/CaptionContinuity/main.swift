@@ -85,5 +85,16 @@ MainActor.assumeIsolated {
  let restored = LiveCaptionState()
  restored.restoreHistory(remote.history)
  precondition(restored.history.map(\.id) == remote.history.map(\.id), "source switches must retain history")
+ let pair = LiveCaptionState()
+ pair.accept("old sentence", final:true)
+ let pairSegment = pair.segmentID
+ pair.targetLanguage = "en-US"
+ pair.acceptTranslation("stale translation", forOriginal:"old sentence", segment:pairSegment, target:"zh-Hans")
+ precondition(pair.translated.isEmpty && pair.history.first?.translated == "stale translation", "a previous target must not appear as the current target")
+ pair.acceptTranslation("wrong target", forOriginal:"old sentence", segment:pairSegment, target:"en-US")
+ precondition(pair.history.first?.translated == "stale translation", "history must retain its original target language")
+ pair.accept("new sentence", final:true)
+ pair.acceptTranslation("new target", forOriginal:"new sentence", segment:pair.segmentID, target:"en-US")
+ precondition(pair.translated == "new target" && pair.history.last?.targetLanguage == "en-US")
  print("PASS: translation revisions, history association, long text, clear")
 }
