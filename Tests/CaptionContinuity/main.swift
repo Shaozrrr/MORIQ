@@ -56,6 +56,22 @@ MainActor.assumeIsolated {
  precondition(s.translationSnapshot == "And so my fellow Americans ask")
  s.accept("And so my fellow Americans, ask not what your country can do for you.", final: true)
  precondition(s.translationSnapshot.hasSuffix("can do for you."))
+ // Minor punctuation or capitalization changes do not erase an otherwise
+ // stable phrase; the translation input keeps the current visible spelling.
+ s.clearCurrent()
+ s.accept("The meeting begins tomorrow, at noon")
+ s.accept("the meeting begins tomorrow at home")
+ precondition(s.translationSnapshot == "the meeting begins tomorrow at")
+ // Changed negation or an internal apostrophe is a semantic change, not merely
+ // punctuation, so agreement must stop before it.
+ s.clearCurrent()
+ s.accept("I really can not agree with this")
+ s.accept("I really can now agree with this")
+ precondition(s.translationSnapshot == "I really can")
+ s.clearCurrent()
+ s.accept("I really can't do this yet")
+ s.accept("I really cant do this yet")
+ precondition(s.translationSnapshot.isEmpty)
  let remote = LiveCaptionState(); remote.managedSpeech = true
  precondition(CaptionAudioSource.system.accepts(.audio) && !CaptionAudioSource.system.accepts(.microphone))
  precondition(CaptionAudioSource.microphone.accepts(.microphone) && !CaptionAudioSource.microphone.accepts(.audio))

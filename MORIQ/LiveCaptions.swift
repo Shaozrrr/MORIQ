@@ -79,7 +79,19 @@ struct CaptionHistoryEntry: Identifiable {
             // two consecutive hypotheses; the final result remains complete.
             let previous = priorHypothesis.split(whereSeparator: \.isWhitespace)
             let current = bounded.split(whereSeparator: \.isWhitespace)
-            let count = zip(previous, current).prefix { $0 == $1 }.count
+            // Marswind's MIT-licensed LocalAgreement normalizes case and
+            // punctuation when comparing consecutive Whisper hypotheses:
+            // https://github.com/glenau/marswind/blob/51b0e6548b18349fab6c75e90a0c082a57c3e99b/src-tauri/src/asr/agreement.rs
+            // Only trim edge punctuation here: internal apostrophes and
+            // hyphens can change meaning ("can't" must not match "cant").
+            func comparisonWord(_ word: Substring) -> String {
+                String(word).trimmingCharacters(in: .punctuationCharacters)
+                    .lowercased(with: Locale(identifier: "en_US_POSIX"))
+            }
+            let count = zip(previous, current).prefix {
+                let left = comparisonWord($0), right = comparisonWord($1)
+                return !left.isEmpty && left == right
+            }.count
             stableTranslationText = count >= 3 ? current.prefix(count).joined(separator: " ") : ""
         }
         // A recognizer may replace the whole partial hypothesis, rather than
