@@ -1,0 +1,7 @@
+*
+!*.py
+!deploy/
+deploy/*
+!deploy/*.py
+!deploy/requirements.txt
+!Dockerfile.fake
