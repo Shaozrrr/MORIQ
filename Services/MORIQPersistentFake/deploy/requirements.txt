@@ -1,0 +1,3 @@
+# Version used by the local staging integration tests. Review and update with
+# the service before an actual public deployment.
+websockets==16.0
