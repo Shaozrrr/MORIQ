@@ -34,9 +34,10 @@ def main():
         if len(sys.argv)!=2 or sys.argv[1] not in COMMANDS:raise ValueError('invalid fixed test mode')
         if os.environ.get('MORIQ_FAKE_DROP_ROOT_ACK')!='synthetic-test-volume-only':raise ValueError('test ack required')
         if any(v and ('PROVIDER_KEY' in k or k in ('SONIOX_API_KEY','DEEPSEEK_API_KEY','DEEPL_API_KEY')) for k,v in os.environ.items()):raise ValueError('provider credentials forbidden')
+        os.umask(0o077)
         prepare(os.environ['RAILWAY_VOLUME_MOUNT_PATH'])
         os.setgroups([]);os.setgid(GID);os.setuid(UID)
-        if os.geteuid()!=UID or os.getegid()!=GID:raise ValueError('privilege drop failed')
+        if os.geteuid()!=UID or os.getegid()!=GID or os.getgroups():raise ValueError('privilege drop failed')
         print('Synthetic test directory ready; running as unprivileged service user.',flush=True)
         os.execv(sys.executable,[sys.executable,COMMANDS[sys.argv[1]]])
     except Exception:
