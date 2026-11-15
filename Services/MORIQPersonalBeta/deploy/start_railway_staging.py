@@ -1,5 +1,5 @@
 """Explicit single-instance Railway staging only, not an identity service."""
-import asyncio, fcntl, os, stat, sys
+import asyncio, fcntl, os, signal, stat, sys
 from http import HTTPStatus
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,7 +86,16 @@ def main():
         from websockets.asyncio.server import serve
         router=build_router(gateway)
         async def run():
-            async with serve(router,host,port,max_size=8192,compression=None,process_request=public_routes): await asyncio.Future()
+            loop=asyncio.get_running_loop()
+            stopping=asyncio.Event()
+            loop.add_signal_handler(signal.SIGTERM, stopping.set)
+            loop.add_signal_handler(signal.SIGINT, stopping.set)
+            try:
+                async with serve(router,host,port,max_size=8192,compression=None,process_request=public_routes):
+                    await stopping.wait()
+            finally:
+                loop.remove_signal_handler(signal.SIGTERM)
+                loop.remove_signal_handler(signal.SIGINT)
         asyncio.run(run())
 
 if __name__=='__main__':
