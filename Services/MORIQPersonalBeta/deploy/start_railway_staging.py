@@ -98,8 +98,37 @@ def main():
                 loop.remove_signal_handler(signal.SIGINT)
         asyncio.run(run())
 
+def diagnostic_once():
+    # No listener and no outbound sockets during this one-shot startup check.
+    import socket
+    def no_network(*args, **kwargs):
+        raise RuntimeError('diagnostic network disabled')
+    socket.create_connection = no_network
+    socket.socket.connect = no_network
+    codes = {
+        'Railway PORT must be a valid TCP port': 'PORT_INVALID',
+        'staging not enabled': 'STAGING_ACK',
+        'sealed secret acknowledgement required': 'SEALED_ACK',
+        'unsupported configuration': 'UNSUPPORTED_CONFIG',
+        'persistent mount required': 'MOUNT_INVALID',
+        'provisioned accounts and limits required': 'ACCOUNT_OR_LIMITS_INVALID',
+        'invalid credential': 'TRANSLATION_KEY_FORMAT',
+        'invalid provider credential': 'VOICE_KEY_FORMAT',
+        'invalid translation beta configuration': 'TRANSLATION_CONFIG',
+        'account request rate required': 'RATE_CONFIG',
+        'guest sign-up disabled for personal beta': 'GUEST_CONFIG',
+    }
+    try:
+        with locked_configure(os.environ):
+            print('DIAGNOSTIC_CONFIG_OK_NO_NETWORK', flush=True)
+    except Exception as exc:
+        code = codes.get(str(exc), 'STARTUP_OTHER') if type(exc) is ValueError else 'STARTUP_OTHER'
+        print('DIAGNOSTIC_' + code, flush=True)
+
 if __name__=='__main__':
-    try: main()
+    try:
+        if os.environ.get('MORIQ_STARTUP_DIAGNOSTIC') == '1': diagnostic_once()
+        else: main()
     except Exception:
         print('MORIQ Railway staging startup failed; review configuration.',file=sys.stderr)
         sys.exit(1)
