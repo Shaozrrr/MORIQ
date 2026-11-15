@@ -20,11 +20,13 @@ def private(path, *, directory=False):
 
 
 def prepare(mode):
-    if os.geteuid() != 0 or MOUNT.resolve() != MOUNT or not os.path.ismount(MOUNT):
-        raise ValueError('expected root and mounted volume')
+    if MOUNT.resolve() != MOUNT or not os.path.ismount(MOUNT):
+        raise ValueError('expected mounted volume')
     if os.environ.get('RAILWAY_VOLUME_MOUNT_PATH') != str(MOUNT):
         raise ValueError('unexpected mount')
     if mode == 'bootstrap':
+        if os.geteuid() != 0:
+            raise ValueError('bootstrap requires root')
         if os.environ.get('MORIQ_PERSONAL_BOOTSTRAP_ACK') != 'one-time-hashes-only-no-provider':
             raise ValueError('bootstrap not enabled')
         if any(value and ('PROVIDER_KEY' in key or key in ('SONIOX_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPL_API_KEY')) for key, value in os.environ.items()):
@@ -38,6 +40,8 @@ def prepare(mode):
         if DATABASE.exists() or DATABASE.is_symlink():
             raise ValueError('database already exists')
     elif mode == 'serve':
+        if (os.getuid(), os.geteuid(), os.getgid(), os.getegid()) != (UID, UID, GID, GID) or any(group != GID for group in os.getgroups()):
+            raise ValueError('serve requires unprivileged identity')
         if os.environ.get('MORIQ_PERSONAL_BOOTSTRAP_ACK') or os.environ.get('MORIQ_PERSONAL_BOOTSTRAP_SEED'):
             raise ValueError('bootstrap configuration must be removed')
         if os.environ.get('MORIQ_ACCOUNT_DB') != str(DATABASE):
@@ -55,17 +59,22 @@ def prepare(mode):
 def run():
     mode = os.environ.get('MORIQ_PERSONAL_MODE', '')
     if len(sys.argv) == 2 and sys.argv[1] == '--dropped':
-        if mode not in SCRIPTS or os.getuid() != UID or os.geteuid() != UID or os.getgid() != GID or os.getegid() != GID or os.getgroups():
+        if mode not in SCRIPTS or os.getuid() != UID or os.geteuid() != UID or os.getgid() != GID or os.getegid() != GID or any(group != GID for group in os.getgroups()):
             raise ValueError('invalid runtime identity')
         status = Path('/proc/self/status').read_text()
         fields = dict(line.split(':', 1) for line in status.splitlines() if ':' in line)
-        if int(fields['CapEff'].strip(), 16) or int(fields['CapPrm'].strip(), 16) or fields['NoNewPrivs'].strip() != '1':
+        if any(int(value) != UID for value in fields['Uid'].split()) or any(int(value) != GID for value in fields['Gid'].split()):
+            raise ValueError('unexpected saved identity')
+        if any(int(fields[key].strip(), 16) for key in ('CapInh', 'CapEff', 'CapPrm', 'CapAmb')) or fields['NoNewPrivs'].strip() != '1':
             raise ValueError('capabilities or privilege escalation permitted')
         os.execv(sys.executable, [sys.executable, SCRIPTS[mode]])
     if len(sys.argv) != 1:
         raise ValueError('unexpected arguments')
     os.umask(0o077)
     prepare(mode)
+    if mode == 'serve':
+        os.execv('/usr/bin/setpriv', ['/usr/bin/setpriv', '--no-new-privs',
+                 sys.executable, __file__, '--dropped'])
     os.execv('/usr/bin/setpriv', ['/usr/bin/setpriv', '--reuid=65534', '--regid=65534',
              '--clear-groups', '--inh-caps=-all', '--bounding-set=-all', '--no-new-privs',
              sys.executable, __file__, '--dropped'])
