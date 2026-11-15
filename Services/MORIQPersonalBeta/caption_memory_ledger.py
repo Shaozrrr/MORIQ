@@ -100,6 +100,12 @@ class MemorySourceLedger:
      if db.in_transaction:db.execute('ROLLBACK')
      raise
    return text,hashlib.sha256(text.encode()).hexdigest(),value[2]
+ def retire_final(self,account,request):
+  # Experimental punctuation mode only calls this after its result is sent.
+  key=tuple(request[k] for k in ('session','epoch','unit','revision'))
+  with self.lock:
+   value=self.units.get(key)
+   if value is not None and value[0]==account.account:del self.units[key]
  def is_live(self,account,request):
   key=tuple(request[k] for k in ('session','epoch','unit','revision'))
   with self.lock:
@@ -107,14 +113,16 @@ class MemorySourceLedger:
    if not value or value[0]!=account.account or key[:2] in self.closed:return False
    if max((k[3] for k in self.units if k[:3]==key[:3]),default=0)!=key[3]:return False
    with self.accounts._connection() as db:return self._auth(db,account)
- async def review(self,account,request,provider,*,context_cost=0):
+ async def review(self,account,request,provider,*,context_cost=0,fence=None):
   if not isinstance(request,dict) or set(request)!={'session','epoch','unit','revision','target'}:raise ValueError('only references allowed')
-  source,digest,expires=await asyncio.to_thread(self._claim,account,*(request[k] for k in ('session','epoch','unit','revision','target')),context_cost)
+  if fence is None:source,digest,expires=await asyncio.to_thread(self._claim,account,*(request[k] for k in ('session','epoch','unit','revision','target')),context_cost)
+  else:source,digest,expires=await asyncio.to_thread(fence.claim,self,account,request,context_cost)
   try:candidate=await asyncio.wait_for(provider(source,request['target']),3)
   except Exception:return {'status':'unavailable','auto_apply':False}
   with self.lock:
    self._purge();key=tuple(request[k] for k in ('session','epoch','unit','revision'))
    valid=key in self.units and self.units[key][0]==account.account and self.clock()<expires and max((k[3] for k in self.units if k[:3]==key[:3]),default=0)==request['revision']
    with self.accounts._connection() as db:valid=valid and self._auth(db,account)
+  if fence is not None:valid=valid and fence.valid(account,request)
   if not valid or not isinstance(candidate,str) or not candidate.strip() or len(candidate)>4000:return {'status':'unavailable','auto_apply':False}
   return {'status':'candidate','candidate':candidate,'source_sha256':digest,'association_verified':False,'auto_apply':False,**request}

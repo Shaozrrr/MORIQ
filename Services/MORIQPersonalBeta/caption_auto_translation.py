@@ -68,6 +68,7 @@ class AutoTranslation:
         from caption_memory_ledger import MemorySourceLedger
         if type(ledger) is not MemorySourceLedger:raise ValueError('volatile trusted ledger required')
         self.ledger=ledger;self.provider=provider;self.queue=asyncio.Queue(maxsize=max_pending);self.closed=False;self.diagnostic=diagnostic;self.public_capture=public_capture
+        self.fence=None;self.provider_slots=None
         self.workers=[asyncio.create_task(self._work()) for _ in range(2)]
 
     async def submit(self,account,reference,*,context=''):
@@ -117,7 +118,11 @@ class AutoTranslation:
                         report('guard','conflict',0,rule=rule);raise ValueError('candidate rejected')
                     report('guard','passed',0)
                     return candidate
-                result=await self.ledger.review(account,reference,checked,context_cost=len(context))
+                if self.fence is None:
+                    result=await self.ledger.review(account,reference,checked,context_cost=len(context))
+                else:
+                    async with self.provider_slots:
+                        result=await self.ledger.review(account,reference,checked,context_cost=len(context),fence=self.fence)
                 report('ledger','candidate' if result.get('status')=='candidate' else 'unavailable',0)
                 if not future.done():future.set_result(result)
             except asyncio.CancelledError:

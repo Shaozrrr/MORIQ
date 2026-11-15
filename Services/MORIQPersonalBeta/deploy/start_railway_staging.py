@@ -1,5 +1,5 @@
 """Explicit single-instance Railway staging only, not an identity service."""
-import asyncio, fcntl, os, signal, stat, sys
+import asyncio, fcntl, os, re, signal, stat, sys
 from http import HTTPStatus
 from contextlib import contextmanager
 from pathlib import Path
@@ -47,6 +47,21 @@ def configure(env, *, mount_check=os.path.ismount):
     enabled=env.get('MORIQ_CAPTION_AUTO_TRANSLATION_BETA','0')
     if enabled not in ('0','1') or (enabled=='1' and env.get('MORIQ_CAPTION_AUTO_TRANSLATION_ACK')!='deepseek-server-side-bounded'):
         raise ValueError('invalid translation beta configuration')
+    punct=env.get('MORIQ_PUNCT_BETA_ENABLED','0')
+    if punct not in ('0','1'): raise ValueError('invalid punctuation beta configuration')
+    allowed=None
+    if punct=='1':
+        if enabled!='1' or env.get('MORIQ_PUNCT_BETA_ACK')!='authorized-accounts-only':
+            raise ValueError('invalid punctuation beta configuration')
+        raw=env.get('MORIQ_PUNCT_BETA_ACCOUNTS','')
+        names=raw.split(',')
+        if not 1<=len(names)<=16 or any(not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', n) for n in names) or len(set(names))!=len(names):
+            raise ValueError('invalid punctuation beta accounts')
+        with accounts._connection() as conn:
+            for name in names:
+                if not conn.execute('SELECT 1 FROM accounts a JOIN speech_limits l ON l.account_id=a.account_id WHERE a.account_id=? AND a.daily_limit>0 AND l.daily_seconds>0',(name,)).fetchone():
+                    raise ValueError('unprovisioned punctuation beta account')
+        allowed=frozenset(names)
     from soniox_gateway import SonioxGateway
     ledger=None
     try:
@@ -56,7 +71,7 @@ def configure(env, *, mount_check=os.path.ismount):
             from deepseek_translation import ControlledDeepSeekProvider
             provider=ControlledDeepSeekProvider(env.get('MORIQ_DEEPSEEK_PROVIDER_KEY',''))
             ledger=MemorySourceLedger(accounts,fake_only=True)
-        return SonioxGateway(key,account_store=accounts,source_ledger=ledger,enable_trusted_source=enabled=='1',auto_provider=provider),host,port,db
+        return SonioxGateway(key,account_store=accounts,source_ledger=ledger,enable_trusted_source=enabled=='1',auto_provider=provider,experimental_punct_enabled=punct=='1',punct_allowed_accounts=allowed),host,port,db
     except BaseException:
         if ledger:ledger.shutdown()
         raise

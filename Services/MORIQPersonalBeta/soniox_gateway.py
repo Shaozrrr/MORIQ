@@ -197,7 +197,12 @@ class TokenSnapshots:
 
 
 class SonioxGateway:
-    def __init__(self,key,*,account_store,upstream=PROVIDER,testing=False,first_audio_timeout=8,idle_timeout=12,clock=time.monotonic,source_ledger=None,enable_trusted_source=False,auto_provider=None,auto_diagnostic=None,public_capture=None,auto_skip_units=0,auto_max_units=None):
+    def __init__(self,key,*,account_store,upstream=PROVIDER,testing=False,first_audio_timeout=8,idle_timeout=12,clock=time.monotonic,source_ledger=None,enable_trusted_source=False,auto_provider=None,auto_diagnostic=None,public_capture=None,auto_skip_units=0,auto_max_units=None,experimental_punct_enabled=False,punct_allowed_accounts=None):
+        if type(experimental_punct_enabled) is not bool or (experimental_punct_enabled and not testing and (not punct_allowed_accounts or not enable_trusted_source or auto_provider is None)):raise ValueError('punctuation beta requires explicitly authorized accounts and translation')
+        self.experimental_punct_enabled=experimental_punct_enabled
+        if punct_allowed_accounts is not None and (not isinstance(punct_allowed_accounts, frozenset) or not punct_allowed_accounts or any(not isinstance(x, str) or not x for x in punct_allowed_accounts)):
+            raise ValueError('invalid punctuation account allowlist')
+        self.punct_allowed_accounts=punct_allowed_accounts
         parsed=urllib.parse.urlsplit(upstream)
         try: local=ipaddress.ip_address(parsed.hostname or '').is_loopback
         except ValueError: local=False
@@ -232,6 +237,7 @@ class SonioxGateway:
         self.key,self.accounts,self.upstream,self.clock=key,account_store,upstream,clock
         self.first_audio_timeout,self.idle_timeout=first_audio_timeout,idle_timeout
         self.slots=asyncio.Semaphore(2)
+        self.translation_slots=asyncio.Semaphore(2)
         # Railway staging is intentionally a single process protected by a
         # volume lock. A single account may not occupy both upstream slots.
         # This is not a distributed limit across separate deployments.
@@ -239,7 +245,7 @@ class SonioxGateway:
 
     async def handle(self,client):
         async with self.slots:
-            collector=None;automatic=None;pending_auto=set();active_account=None
+            collector=None;automatic=None;session_fence=None;pending_auto=set();active_account=None;punct_units=False;closing=asyncio.Event()
             try:
                 auth=client.request.headers.get('Authorization',''); token=auth[7:] if auth.startswith('Bearer ') else ''
                 if client.request.path!='/v1/speech/stream' or not 32<=len(token)<=256 or not token.isascii() or not all(33<=ord(c)<=126 for c in token):
@@ -260,7 +266,7 @@ class SonioxGateway:
                 config=json.loads(raw) if isinstance(raw,str) and len(raw)<=512 else None
                 required={'type','source','target'}
                 if (not isinstance(config,dict) or not required <= set(config) or
-                    not set(config) <= required|{'protocol','confirmed_delta_v1','native_translation_v1','native_batch_v1','source_units_v1','source_units_v2','source_units_atomic_v1','auto_translation_v1'} or
+                    not set(config) <= required|{'protocol','confirmed_delta_v1','native_translation_v1','native_batch_v1','source_units_v1','source_units_v2','source_units_atomic_v1','auto_translation_v1','source_units_punct_v1'} or
                     config['type']!='start' or config['target'] not in ('en','zh','ja','ko') or
                     ('confirmed_delta_v1' in config and config['confirmed_delta_v1'] is not True) or
                     ('native_translation_v1' in config and config['native_translation_v1'] is not True) or
@@ -268,6 +274,7 @@ class SonioxGateway:
                     ('source_units_v1' in config and (config['source_units_v1'] is not True or config.get('native_translation_v1') is not True or self.source_ledger is None)) or
                     ('source_units_v2' in config and (config['source_units_v2'] is not True or config.get('native_translation_v1') is not True or config.get('native_batch_v1') is not True or self.source_ledger is None or 'source_units_v1' in config)) or
                     ('source_units_atomic_v1' in config and (config['source_units_atomic_v1'] is not True or config.get('source_units_v2') is not True)) or
+                    ('source_units_punct_v1' in config and (not self.experimental_punct_enabled or (self.punct_allowed_accounts is not None and account.account not in self.punct_allowed_accounts) or config['source_units_punct_v1'] is not True or config.get('source_units_atomic_v1') is not True)) or
                     ('auto_translation_v1' in config and (config['auto_translation_v1'] is not True or config.get('source_units_atomic_v1') is not True or self.auto_provider is None or config['target'] not in ('en','zh'))) or
                     (self.trusted_source and ('source_units_v1' in config or ('source_units_v2' in config and config.get('source_units_atomic_v1') is not True))) or
                     (config.get('confirmed_delta_v1') and config.get('native_translation_v1'))):
@@ -278,14 +285,22 @@ class SonioxGateway:
                 source_units=config.get('source_units_v1',False)
                 source_units_v2=config.get('source_units_v2',False)
                 atomic_units=config.get('source_units_atomic_v1',False)
+                punct_units=config.get('source_units_punct_v1',False)
                 auto_enabled=config.get('auto_translation_v1',False)
                 if auto_enabled:
                     from caption_auto_translation import AutoTranslation
                     automatic=AutoTranslation(self.source_ledger,self.auto_provider,enabled=True,fake_only=True,diagnostic=self.auto_diagnostic,public_capture=self.public_capture)
                 if source_units or source_units_v2:
                     if source_units_v2:
-                        from caption_source_collector_v2 import SourceUnitCollectorV2
-                        collector=SourceUnitCollectorV2(self.source_ledger,account,with_context=auto_enabled)
+                        if punct_units:
+                            from collector_experiment import SentenceCollector
+                            collector=SentenceCollector(self.source_ledger,account,with_context=auto_enabled,experimental_sentence_v1=True,experimental_context_120=True)
+                            from session_fence import SessionFence
+                            session_fence=SessionFence(account,collector.session,collector.epoch)
+                            if automatic is not None:automatic.fence=session_fence;automatic.provider_slots=self.translation_slots
+                        else:
+                            from caption_source_collector_v2 import SourceUnitCollectorV2
+                            collector=SourceUnitCollectorV2(self.source_ledger,account,with_context=auto_enabled)
                     else:
                         from caption_source_collector import SourceUnitCollector
                         collector=SourceUnitCollector(self.source_ledger,account)
@@ -335,6 +350,7 @@ class SonioxGateway:
                             ready['source_units_v2']=True;ready['original_stream_id']=collector.original_stream_id
                             ready['session']=collector.session;ready['epoch']=collector.epoch
                         if atomic_units: ready['source_units_atomic_v1']=True
+                        if punct_units: ready['source_units_punct_v1']=True
                         if auto_enabled: ready['auto_translation_v1']=True
                         await client.send(json.dumps(ready))
                         async def upload():
@@ -354,7 +370,11 @@ class SonioxGateway:
                                 else: raise ValueError('invalid client message')
                         async def download():
                             snapshots=NativeTranslationLanes() if native_mode else TokenSnapshots()
-                            batch_seq=0;auto_seen=0;auto_attempts=0;previous_auto=None;auto_order=0
+                            batch_seq=0;auto_seen=0;auto_attempts=0;previous_auto=None;auto_order=0;punct_degraded=False
+                            confirmed_source=''
+                            if punct_units:
+                                from coverage_contract import CoverageVerifier,make_batch,SourceCapacity
+                                coverage=CoverageVerifier(config,ready)
                             async def auto_emit(unit,context,previous,force_error=False):
                                 target={'zh':'zh-Hans','en':'en-US'}[config['target']]
                                 fields={k:unit[k] for k in ('session','epoch','original_stream_id','unit','revision','source_sha256')}
@@ -372,16 +392,36 @@ class SonioxGateway:
                                        await asyncio.to_thread(self.source_ledger.is_live,account,ref))
                                 if valid: event={'type':'auto_translation_v1',**fields,'text':result['candidate']}
                                 else: event={'type':'auto_translation_error_v1',**fields,'code':'unavailable'}
+                                if punct_units and closing.is_set():return
                                 await client.send(json.dumps(event,ensure_ascii=False))
+                                if punct_units: await asyncio.to_thread(self.source_ledger.retire_final,account,ref)
                             async def emit_atomic(events,finished=False,due=False):
-                                nonlocal batch_seq,auto_seen,auto_attempts,previous_auto,auto_order
+                                nonlocal batch_seq,auto_seen,auto_attempts,previous_auto,auto_order,confirmed_source,punct_degraded
                                 batch_seq+=1
                                 batch={'type':'lane_batch','events':events,'batch_seq':batch_seq}
-                                units=collector.flush_due(batch_seq) if due else collector.accept(events,batch_seq,finished=finished)
-                                if collector.enabled:batch['source_units']=units
+                                if punct_units:
+                                    units=[]
+                                    if not punct_degraded:
+                                        try:
+                                            for child in events:
+                                                if child.get('type')=='lane_delta' and child.get('lane')=='original':confirmed_source+=child['confirmed_delta']
+                                            if len(confirmed_source.encode('utf-8')) > 512000: raise SourceCapacity('source cache limit')
+                                            contract=make_batch(collector,events,batch_seq,finished,config,ready)
+                                            coverage.accept(contract,confirmed_source,finished)
+                                            units=contract['source_units'];batch.update(contract)
+                                        except SourceCapacity:
+                                            punct_degraded=True; confirmed_source=''
+                                            await asyncio.to_thread(collector.close)
+                                            for task in pending_auto: task.cancel()
+                                            if pending_auto: await asyncio.gather(*pending_auto,return_exceptions=True)
+                                    if punct_degraded: batch['source_units_unavailable']=True
                                 else:
-                                    try:collector.close()
-                                    except Exception:pass
+                                    units=collector.flush_due(batch_seq) if due else collector.accept(events,batch_seq,finished=finished)
+                                if collector.enabled and not punct_degraded:batch['source_units']=units
+                                else:
+                                    if not punct_degraded:
+                                        try:collector.close()
+                                        except Exception:pass
                                     batch['source_units_unavailable']=True
                                 payload=json.dumps(batch,ensure_ascii=False)
                                 if len(payload.encode('utf-8'))>32768:
@@ -391,6 +431,8 @@ class SonioxGateway:
                                     payload=json.dumps(batch,ensure_ascii=False)
                                 if len(payload.encode('utf-8'))>32768:raise ValueError('native batch too large')
                                 await client.send(payload)
+                                if punct_units and not auto_enabled and not punct_degraded:
+                                    for unit in units: await asyncio.to_thread(self.source_ledger.retire_final,account,unit)
                                 if auto_enabled and collector.enabled and 'source_units' in batch:
                                     for unit in units:
                                         context=collector.contexts.pop(unit['unit'],'')
@@ -414,7 +456,7 @@ class SonioxGateway:
                                     # A finished packet can flush confirmed source without
                                     # native events; give that unit its own ordered batch.
                                     pending_finish=msg.get('finished') is True and bool(collector.pending.strip())
-                                    if events or pending_finish:
+                                    if events or pending_finish or (punct_units and msg.get('finished') is True):
                                         await emit_atomic(events,finished=msg.get('finished') is True)
                                 else:
                                     if native_batch and events:
@@ -457,6 +499,11 @@ class SonioxGateway:
                         for task in tasks|{budget_task}: task.cancel()
                         await asyncio.gather(*(tasks|{budget_task}),return_exceptions=True)
             except Exception as error:
+                from coverage_contract import SourceCapacity
+                if isinstance(error,SourceCapacity):
+                    try: await client.send(json.dumps({'type':'error','code':'source_capacity','message':'字幕记录达到本次容量上限，请重新开始。'},ensure_ascii=False)); await client.close(1011,'source capacity')
+                    except Exception: pass
+                    return
                 quota=isinstance(error,PermissionError) and str(error) in ('request quota unavailable','speech quota unavailable')
                 expired=isinstance(error,PermissionError) and str(error)=='session ended'
                 payload={'type':'error','message':'额度或请求频率已达上限' if quota else ('试用会话无效或已结束。' if expired else '语音服务暂不可用')}
@@ -465,15 +512,27 @@ class SonioxGateway:
                 try: await client.send(json.dumps(payload,ensure_ascii=False)); await client.close(1011,'speech unavailable')
                 except Exception: pass
             finally:
+                closing.set()
+                if session_fence is not None: await asyncio.to_thread(session_fence.close)
                 try:
-                    for task in pending_auto:task.cancel()
-                    if pending_auto:await asyncio.gather(*pending_auto,return_exceptions=True)
-                    if automatic is not None:await automatic.close()
-                    if collector is not None:
-                        try: collector.close()
+                    if punct_units and collector is not None and self.source_ledger is not None:
+                        try: await asyncio.to_thread(self.source_ledger.close_epoch,collector.account,collector.session,collector.epoch)
                         except Exception: pass
                 finally:
-                    if active_account is not None:self.active_accounts.discard(active_account)
+                    try:
+                        for task in pending_auto:task.cancel()
+                        if pending_auto:await asyncio.gather(*pending_auto,return_exceptions=True)
+                    finally:
+                        try:
+                            if automatic is not None:await automatic.close()
+                        finally:
+                            try:
+                                if collector is not None:
+                                    try:collector.close()
+                                    except Exception:pass
+                            finally:
+                                if active_account is not None:self.active_accounts.discard(active_account)
+
 
 
 def build_local_gateway(env):

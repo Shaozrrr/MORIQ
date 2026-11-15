@@ -1,7 +1,18 @@
 """Opt-in server-side text translation, fixed official endpoint and no retries."""
-import asyncio,http.client,json,ssl,threading,time
+import asyncio,http.client,json,ssl,sys,threading,time
 from deepl_experiment import DeepLExperimentError
 _SLOTS=threading.BoundedSemaphore(2)
+
+def _verified_tls_context():
+ # Some python.org macOS builds ship without configured default CA paths.
+ # Use the macOS system CA bundle explicitly; never weaken verification or
+ # silently fall back to an unverified connection. Linux retains its defaults.
+ try:
+  context = ssl.create_default_context(cafile='/etc/ssl/cert.pem') if sys.platform == 'darwin' else ssl.create_default_context()
+ except OSError:
+  raise ssl.SSLError('trust bundle unavailable') from None
+ if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname: raise ssl.SSLError('verification unavailable')
+ return context
 
 class ControlledDeepSeekProvider:
  def __init__(self,key):
@@ -18,8 +29,7 @@ class ControlledDeepSeekProvider:
   def send():
    with _SLOTS:
     if cancelled.is_set():raise TimeoutError()
-    tls=ssl.create_default_context()
-    if tls.verify_mode!=ssl.CERT_REQUIRED or not tls.check_hostname:raise ssl.SSLError('verification unavailable')
+    tls=_verified_tls_context()
     conn=http.client.HTTPSConnection('api.deepseek.com',timeout=3,context=tls);started=time.monotonic();status=None;outcome='error'
     try:
      if cancelled.is_set():raise TimeoutError()
