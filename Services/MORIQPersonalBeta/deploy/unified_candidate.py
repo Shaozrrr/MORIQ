@@ -18,6 +18,13 @@ def enabled(env):
  if value=='1' and env.get('MORIQ_UNIFIED_ACK')!='reviewed-single-instance':raise ValueError('missing unified acknowledgement')
  return value=='1'
 
+def proxy_only(env):
+ value=env.get('MORIQ_UNIFIED_PROXY_ONLY','0')
+ if value not in ('0','1'):raise ValueError('invalid proxy setting')
+ if value=='1' and (env.get('MORIQ_UNIFIED_ACK')!='reviewed-single-instance' or enabled(env)):
+  raise ValueError('invalid proxy-only configuration')
+ return value=='1'
+
 def validate(env):
  if not enabled(env):return False
  if env.get('MORIQ_METRICS_ACK')!='private-metadata-fail-closed' or not env.get('MORIQ_METRICS_DB'):raise ValueError('metrics required')
@@ -29,16 +36,20 @@ def validate(env):
  return True
 
 def caddyfile(port,speech_port,chat_port):
- if any(type(x) is not int or not 1<=x<=65535 for x in (port,speech_port,chat_port)):raise ValueError('invalid port')
- return ('{\n auto_https off\n admin off\n servers {\n  timeouts {\n   read_header 5s\n   read_body 10s\n  }\n }\n}\n:'+str(port)+' {\n handle /v1/chat/completions {\n  request_body {\n   max_size 48MB\n  }\n  reverse_proxy 127.0.0.1:'+str(chat_port)+'\n }\n handle {\n  reverse_proxy 127.0.0.1:'+str(speech_port)+'\n }\n}\n')
+ if any(type(x) is not int or not 1<=x<=65535 for x in (port,speech_port)) or (chat_port is not None and (type(chat_port) is not int or not 1<=chat_port<=65535)):raise ValueError('invalid port')
+ chat='  respond 404\n' if chat_port is None else '  request_body {\n   max_size 48MB\n  }\n  reverse_proxy 127.0.0.1:'+str(chat_port)+'\n'
+ return ('{\n auto_https off\n admin off\n servers {\n  timeouts {\n   read_header 5s\n   read_body 10s\n  }\n }\n}\n:'+str(port)+' {\n handle /v1/chat/completions {\n'+chat+' }\n handle {\n  reverse_proxy 127.0.0.1:'+str(speech_port)+'\n }\n}\n')
 
 @asynccontextmanager
-async def backends(gateway,env):
+async def backends(gateway,env,assistant_enabled=True):
  # Both handlers share the same authenticated account and recorder instances.
  speech=await serve(build_router(gateway),'127.0.0.1',0,max_size=8192,compression=None,process_request=readiness_routes(gateway.metrics))
  runner=None
  try:
-  assistant=Gateway(ASSISTANT_UPSTREAM,env['MORIQ_ASSISTANT_MODEL'],env['MORIQ_ASSISTANT_PROVIDER_KEY'],account_store=gateway.accounts)
+  if not assistant_enabled:
+   yield speech.sockets[0].getsockname()[1],None
+   return
+  assistant=Gateway(ASSISTANT_UPSTREAM,env['MORIQ_ASSISTANT_MODEL'],env['MORIQ_ASSISTANT_PROVIDER_KEY'],account_store=gateway.accounts,supports_images=True)
   app=make_app(assistant,ASSISTANT_UPSTREAM,recorder=gateway.metrics,metric_provider='deepseek',require_operation_id=True,reserved_tokens=int(env['MORIQ_ASSISTANT_TOKEN_RESERVATION']))
   runner=web.AppRunner(app,access_log=None,handler_cancellation=True);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   yield speech.sockets[0].getsockname()[1],site._server.sockets[0].getsockname()[1]
@@ -47,7 +58,8 @@ async def backends(gateway,env):
   speech.close();await speech.wait_closed()
 
 async def run_unified(gateway,port,env,stop):
- async with backends(gateway,env) as (sp,ap):
+ manager=backends(gateway,env,assistant_enabled=False) if proxy_only(env) else backends(gateway,env)
+ async with manager as (sp,ap):
   with tempfile.TemporaryDirectory(prefix='moriq-caddy-') as temp:
    conf=pathlib.Path(temp)/'Caddyfile';conf.write_text(caddyfile(port,sp,ap));os.chmod(conf,0o600)
    process=await asyncio.create_subprocess_exec('caddy','run','--config',str(conf),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'HOME':temp})
@@ -63,7 +75,8 @@ async def run_unified(gateway,port,env,stop):
      except asyncio.TimeoutError:process.kill();await process.wait()
 
 def main():
- if not validate(os.environ):return speech_main()
+ assistant_on=validate(os.environ);proxy_on=proxy_only(os.environ)
+ if not assistant_on and not proxy_on:return speech_main()
  with locked_configure(os.environ) as (gateway,host,port,db):
   async def serve_until_signal():
    loop=asyncio.get_running_loop();stop=asyncio.Event()
