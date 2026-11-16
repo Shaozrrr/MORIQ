@@ -22,10 +22,15 @@ PROVIDER = 'wss://stt-rt.soniox.com/transcribe-websocket'
 MAX_PAYLOAD = 131072
 
 
-def provider_config(source, translation_target=None):
+def provider_config(source, translation_target=None, client_reference_id=None):
     if source not in ('auto','en','zh','ja','ko'): raise ValueError('unsupported source')
     config={'model':'stt-rt-v6','audio_format':'pcm_s16le','sample_rate':16000,
             'num_channels':1,'enable_endpoint_detection':True,'enable_language_identification':True}
+    if client_reference_id is not None:
+        import uuid
+        parsed=uuid.UUID(hex=client_reference_id)
+        if parsed.version != 4 or parsed.hex != client_reference_id: raise ValueError('invalid reference')
+        config['client_reference_id']=client_reference_id
     if source != 'auto':
         config.update(language_hints=[source], language_hints_strict=True)
     if translation_target is not None:
@@ -197,7 +202,7 @@ class TokenSnapshots:
 
 
 class SonioxGateway:
-    def __init__(self,key,*,account_store,upstream=PROVIDER,testing=False,first_audio_timeout=8,idle_timeout=12,clock=time.monotonic,source_ledger=None,enable_trusted_source=False,auto_provider=None,auto_diagnostic=None,public_capture=None,auto_skip_units=0,auto_max_units=None,experimental_punct_enabled=False,punct_allowed_accounts=None):
+    def __init__(self,key,*,account_store,upstream=PROVIDER,testing=False,first_audio_timeout=8,idle_timeout=12,clock=time.monotonic,source_ledger=None,enable_trusted_source=False,auto_provider=None,auto_diagnostic=None,public_capture=None,auto_skip_units=0,auto_max_units=None,experimental_punct_enabled=False,punct_allowed_accounts=None,metrics=None):
         if type(experimental_punct_enabled) is not bool or (experimental_punct_enabled and not testing and (not punct_allowed_accounts or not enable_trusted_source or auto_provider is None)):raise ValueError('punctuation beta requires explicitly authorized accounts and translation')
         self.experimental_punct_enabled=experimental_punct_enabled
         if punct_allowed_accounts is not None and (not isinstance(punct_allowed_accounts, frozenset) or not punct_allowed_accounts or any(not isinstance(x, str) or not x for x in punct_allowed_accounts)):
@@ -242,10 +247,11 @@ class SonioxGateway:
         # volume lock. A single account may not occupy both upstream slots.
         # This is not a distributed limit across separate deployments.
         self.active_accounts=set()
+        self.metrics=metrics
 
     async def handle(self,client):
         async with self.slots:
-            collector=None;automatic=None;session_fence=None;pending_auto=set();active_account=None;punct_units=False;closing=asyncio.Event()
+            collector=None;automatic=None;session_fence=None;pending_auto=set();active_account=None;punct_units=False;closing=asyncio.Event();metric=None;metric_outcome='failure'
             try:
                 auth=client.request.headers.get('Authorization',''); token=auth[7:] if auth.startswith('Bearer ') else ''
                 if client.request.path!='/v1/speech/stream' or not 32<=len(token)<=256 or not token.isascii() or not all(33<=ord(c)<=126 for c in token):
@@ -314,8 +320,19 @@ class SonioxGateway:
                 if not await asyncio.to_thread(self.accounts.consume_speech,account,1):
                     if await asyncio.to_thread(self.accounts.authenticate,digest)!=account:raise PermissionError('session ended')
                     raise PermissionError('speech quota unavailable')
+                if self.metrics is not None:
+                    metric=await asyncio.to_thread(self.metrics.start,kind='speech',provider='soniox',model='stt-rt-v6')
+                    metric.set_audio_observation(reserved_ms=1000,attempted_samples=0,sent_samples=0,sample_rate=16000)
+                    await asyncio.to_thread(metric.checkpoint)
+                metric_lock=asyncio.Lock()
+                async def update_metric(*,reserved_ms=None,attempted_samples=None,sent_samples=None):
+                    if metric is None:return
+                    async with metric_lock:
+                        metric.set_audio_observation(reserved_ms=metric.reserved_ms if reserved_ms is None else reserved_ms,attempted_samples=metric.attempted_samples if attempted_samples is None else attempted_samples,sent_samples=metric.sent_samples if sent_samples is None else sent_samples,sample_rate=16000)
+                        await asyncio.to_thread(metric.checkpoint)
                 tls=provider_tls_context() if self.upstream.startswith('wss://') else None
                 connector=NoRedirect(self.upstream,additional_headers={'Authorization':'Bearer '+self.key},proxy=None,ssl=tls,max_size=MAX_PAYLOAD,open_timeout=10,close_timeout=2,compression=None)
+                if metric is not None:await asyncio.to_thread(metric.mark_dispatch)
                 async with guarded_upstream(connector,client,self.accounts,digest,account) as upstream:
                     # Meter starts before provider configuration, so stalled or
                     # idle streams cannot spend unreserved wall-clock time.
@@ -329,6 +346,7 @@ class SonioxGateway:
                                     if await asyncio.to_thread(self.accounts.authenticate,digest)!=account:raise PermissionError('session ended')
                                     raise PermissionError('speech quota unavailable')
                                 reserved+=add
+                                await update_metric(reserved_ms=reserved*1000)
                     async def meter():
                         while True:
                             await asyncio.sleep(.25)
@@ -338,7 +356,7 @@ class SonioxGateway:
                     budget_task=asyncio.create_task(meter())
                     tasks=set()
                     try:
-                        await asyncio.wait_for(upstream.send(json.dumps(provider_config(config['source'], config['target'] if native_mode else None))),5)
+                        await asyncio.wait_for(upstream.send(json.dumps(provider_config(config['source'], config['target'] if native_mode else None, metric.request_id if metric is not None else None))),5)
                         if budget_task.done(): budget_task.result()
                         ready={'type':'ready','mode':'translation' if native_mode else 'transcription','supports_keepalive':True}
                         if version==2: ready['protocol']=2
@@ -354,7 +372,7 @@ class SonioxGateway:
                         if auto_enabled: ready['auto_translation_v1']=True
                         await client.send(json.dumps(ready))
                         async def upload():
-                            total=next_sample=0
+                            total=next_sample=0;sent_samples=0;covered_samples=0
                             while True:
                                 msg=await asyncio.wait_for(client.recv(),self.idle_timeout if total else self.first_audio_timeout)
                                 if isinstance(msg,bytes):
@@ -362,13 +380,20 @@ class SonioxGateway:
                                     total+=len(pcm)
                                     if total>32000*60*30: raise ValueError('session limit')
                                     await reserve((total+31999)//32000)
+                                    if total//2>covered_samples:
+                                        covered_samples=((total//2+15999)//16000)*16000
+                                        await update_metric(attempted_samples=covered_samples,sent_samples=sent_samples)
+                                    if self.metrics is not None:self.metrics.check_health()
                                     await upstream.send(pcm)
+                                    sent_samples=total//2
                                 elif msg=='{"type":"keepalive"}' and total:
                                     await upstream.send('{"type":"keepalive"}')
                                 elif msg=='{"type":"finish"}':
+                                    await update_metric(attempted_samples=sent_samples,sent_samples=sent_samples)
                                     await upstream.send(''); return
                                 else: raise ValueError('invalid client message')
                         async def download():
+                            nonlocal metric_outcome
                             snapshots=NativeTranslationLanes() if native_mode else TokenSnapshots()
                             batch_seq=0;auto_seen=0;auto_attempts=0;previous_auto=None;auto_order=0;punct_degraded=False
                             confirmed_source=''
@@ -451,6 +476,9 @@ class SonioxGateway:
                                 else:raw=await upstream.recv()
                                 if not isinstance(raw,str) or len(raw.encode())>MAX_PAYLOAD: raise ValueError('invalid response')
                                 msg=json.loads(raw)
+                                if metric is not None and not metric.provider_responded:
+                                    async with metric_lock:
+                                        await asyncio.to_thread(metric.mark_provider_response)
                                 events=snapshots.accept_deltas(msg) if delta_mode else snapshots.accept(msg)
                                 if atomic_units:
                                     # A finished packet can flush confirmed source without
@@ -473,6 +501,7 @@ class SonioxGateway:
                                         for unit in units:
                                             await client.send(json.dumps(unit))
                                 if msg.get('finished') is True:
+                                    metric_outcome='success'
                                     if pending_auto:
                                         _,late=await asyncio.wait(pending_auto,timeout=7)
                                         for task in late:task.cancel()
@@ -512,6 +541,9 @@ class SonioxGateway:
                 try: await client.send(json.dumps(payload,ensure_ascii=False)); await client.close(1011,'speech unavailable')
                 except Exception: pass
             finally:
+                if metric is not None:
+                    try:await asyncio.to_thread(metric.finish,metric_outcome,retries=0)
+                    except Exception:self.metrics.poison() # pending remains unknown; refuse future dispatch
                 closing.set()
                 if session_fence is not None: await asyncio.to_thread(session_fence.close)
                 try:

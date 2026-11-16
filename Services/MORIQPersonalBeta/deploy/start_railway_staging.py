@@ -18,6 +18,19 @@ def public_routes(connection, request):
         return connection.respond(HTTPStatus.NOT_FOUND, 'not found\n')
     return None
 
+def readiness_routes(metrics):
+    def route(connection,request):
+        if request.path=='/readyz' and request.headers.get('Upgrade','').lower()!='websocket':
+            if metrics is None:
+                return connection.respond(HTTPStatus.NOT_FOUND, 'not found\n')
+            try:metrics.check_health();status=HTTPStatus.OK
+            except Exception:status=HTTPStatus.SERVICE_UNAVAILABLE
+            response=connection.respond(status,'ready\n' if status==HTTPStatus.OK else 'not ready\n')
+            response.headers['Cache-Control']='no-store'
+            return response
+        return public_routes(connection,request)
+    return route
+
 def validated_path(env, *, mount_check=os.path.ismount):
     if env.get('MORIQ_RAILWAY_STAGING_ACK')!='authenticated-single-instance-not-public-release': raise ValueError('staging not enabled')
     if env.get('MORIQ_PROVIDER_SECRET_SEALED_ACK')!='1': raise ValueError('sealed secret acknowledgement required')
@@ -35,7 +48,7 @@ def configure(env, *, mount_check=os.path.ismount):
     if not isinstance(raw_rate,str) or not raw_rate.isascii() or not raw_rate.isdecimal() or not 1<=int(raw_rate)<=60:
         raise ValueError('account request rate required')
     from account_store import AccountStore
-    accounts=AccountStore(db,requests_per_minute=int(raw_rate))
+    accounts=AccountStore(db,requests_per_minute=int(raw_rate),assistant_schema=env.get('MORIQ_UNIFIED_ASSISTANT','0')=='1')
     guest=env.get('MORIQ_GUEST_BETA_ENABLED','0')
     if guest != '0':
         raise ValueError('guest sign-up disabled for personal beta')
@@ -62,6 +75,18 @@ def configure(env, *, mount_check=os.path.ismount):
                 if not conn.execute('SELECT 1 FROM accounts a JOIN speech_limits l ON l.account_id=a.account_id WHERE a.account_id=? AND a.daily_limit>0 AND l.daily_seconds>0',(name,)).fetchone():
                     raise ValueError('unprovisioned punctuation beta account')
         allowed=frozenset(names)
+    metrics=None
+    metric_configured=any(name in env for name in ('MORIQ_METRICS_ACK','MORIQ_METRICS_DB','MORIQ_METRICS_RATES_FILE'))
+    if metric_configured:
+        if env.get('MORIQ_METRICS_ACK')!='private-metadata-fail-closed':raise ValueError('metrics required')
+        metric_path=Path(env.get('MORIQ_METRICS_DB',''))
+        if not metric_path.is_absolute() or metric_path!=db.parent/'usage.db':raise ValueError('invalid metrics path')
+        from usage_metrics import UsageRecorder,load_rate_file
+        models={'stt-rt-v6','deepseek-flash'};providers={'soniox','deepseek'}
+        rate_path=env.get('MORIQ_METRICS_RATES_FILE','')
+        rates=load_rate_file(rate_path,allowed_models=models,allowed_providers=providers) if rate_path else {}
+        metrics=UsageRecorder(metric_path,allowed_models=models,allowed_providers=providers,rates=rates)
+        metrics.check_health()
     from soniox_gateway import SonioxGateway
     ledger=None
     try:
@@ -69,9 +94,9 @@ def configure(env, *, mount_check=os.path.ismount):
         if enabled=='1':
             from caption_memory_ledger import MemorySourceLedger
             from deepseek_translation import ControlledDeepSeekProvider
-            provider=ControlledDeepSeekProvider(env.get('MORIQ_DEEPSEEK_PROVIDER_KEY',''))
+            provider=ControlledDeepSeekProvider(env.get('MORIQ_DEEPSEEK_PROVIDER_KEY',''),metrics=metrics)
             ledger=MemorySourceLedger(accounts,fake_only=True)
-        return SonioxGateway(key,account_store=accounts,source_ledger=ledger,enable_trusted_source=enabled=='1',auto_provider=provider,experimental_punct_enabled=punct=='1',punct_allowed_accounts=allowed),host,port,db
+        return SonioxGateway(key,account_store=accounts,source_ledger=ledger,enable_trusted_source=enabled=='1',auto_provider=provider,experimental_punct_enabled=punct=='1',punct_allowed_accounts=allowed,metrics=metrics),host,port,db
     except BaseException:
         if ledger:ledger.shutdown()
         raise
@@ -106,7 +131,7 @@ def main():
             loop.add_signal_handler(signal.SIGTERM, stopping.set)
             loop.add_signal_handler(signal.SIGINT, stopping.set)
             try:
-                async with serve(router,host,port,max_size=8192,compression=None,process_request=public_routes):
+                async with serve(router,host,port,max_size=8192,compression=None,process_request=readiness_routes(gateway.metrics)):
                     await stopping.wait()
             finally:
                 loop.remove_signal_handler(signal.SIGTERM)

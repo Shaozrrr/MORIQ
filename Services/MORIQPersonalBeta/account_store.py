@@ -18,7 +18,8 @@ class AccountSession:
     token_hash: str
 
 class AccountStore:
-    def __init__(self, path, clock=time.time, *, requests_per_minute=None):
+    def __init__(self, path, clock=time.time, *, requests_per_minute=None, assistant_schema=True):
+        if type(assistant_schema) is not bool: raise ValueError('invalid assistant schema setting')
         if requests_per_minute is not None and (type(requests_per_minute) is not int or not 1 <= requests_per_minute <= 60):
             raise ValueError('invalid request rate limit')
         self.requests_per_minute = requests_per_minute
@@ -86,6 +87,20 @@ class AccountStore:
             # budget. Account daily request counters are summed across days.
             try:
                 db.execute('BEGIN IMMEDIATE')
+                if assistant_schema:
+                    for statement in (
+                        'CREATE TABLE IF NOT EXISTS request_claims (request_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id), created_at REAL NOT NULL, event_id TEXT)',
+                        'CREATE TABLE IF NOT EXISTS token_limits (account_id TEXT PRIMARY KEY REFERENCES accounts(account_id), daily_tokens INTEGER NOT NULL CHECK(daily_tokens > 0))',
+                        'CREATE TABLE IF NOT EXISTS global_token_limit (singleton INTEGER PRIMARY KEY CHECK(singleton=1), daily_tokens INTEGER NOT NULL CHECK(daily_tokens > 0))',
+                        'CREATE TABLE IF NOT EXISTS token_budget_halt (singleton INTEGER PRIMARY KEY CHECK(singleton=1), reason TEXT NOT NULL)',
+                        'CREATE TABLE IF NOT EXISTS token_reservations (request_id TEXT PRIMARY KEY REFERENCES request_claims(request_id), account_id TEXT NOT NULL REFERENCES accounts(account_id), day TEXT NOT NULL, reserved_tokens INTEGER NOT NULL CHECK(reserved_tokens > 0), settled_tokens INTEGER)',
+                    ): db.execute(statement)
+                    claim_columns={row[1] for row in db.execute('PRAGMA table_info(request_claims)')}
+                    if 'event_id' not in claim_columns:
+                        db.execute('ALTER TABLE request_claims ADD COLUMN event_id TEXT')
+                    token_columns={row[1] for row in db.execute('PRAGMA table_info(token_reservations)')}
+                    if 'settled_tokens' not in token_columns:
+                        db.execute('ALTER TABLE token_reservations ADD COLUMN settled_tokens INTEGER')
                 columns={row[1] for row in db.execute('PRAGMA table_info(guest_accounts)')}
                 if 'lifetime_requests' not in columns:
                     db.execute('ALTER TABLE guest_accounts ADD COLUMN lifetime_requests INTEGER NOT NULL DEFAULT 0')
@@ -128,6 +143,18 @@ class AccountStore:
             raise ValueError('invalid global limits')
         with self._connection() as db:
             db.execute('INSERT INTO global_limits(singleton,daily_requests,daily_speech_seconds) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET daily_requests=excluded.daily_requests,daily_speech_seconds=excluded.daily_speech_seconds',(daily_requests,daily_speech_seconds))
+    def put_token_limits(self, account, account_tokens, global_tokens):
+        if not isinstance(account,str) or not _ACCOUNT.fullmatch(account):raise ValueError('invalid account ID')
+        if any(type(v) is not int or not 1 <= v <= 100_000_000 for v in (account_tokens,global_tokens)):raise ValueError('invalid token limits')
+        with self._connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                db.execute('INSERT INTO token_limits VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET daily_tokens=excluded.daily_tokens',(account,account_tokens))
+                db.execute('INSERT INTO global_token_limit VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET daily_tokens=excluded.daily_tokens',(global_tokens,))
+                db.execute('COMMIT')
+            except BaseException:
+                if db.in_transaction:db.execute('ROLLBACK')
+                raise
     def revoke(self, token_hash):
         if not isinstance(token_hash,str) or not _HASH.fullmatch(token_hash): raise ValueError('invalid token hash')
         with self._connection() as db:
@@ -137,8 +164,34 @@ class AccountStore:
         with self._connection() as db:
             result = db.execute('SELECT account_id FROM sessions WHERE token_hash=? AND revoked=0 AND expires_at>?',(token_hash,self.clock())).fetchone()
         return AccountSession(result[0],token_hash) if result else None
-    def consume(self, session):
+    def has_claim(self, session, request_id):
+        if not isinstance(session,AccountSession) or not isinstance(request_id,str) or not re.fullmatch(r'[0-9a-f]{32}',request_id): return False
+        with self._connection() as db:
+            return db.execute('SELECT 1 FROM request_claims WHERE request_id=? AND account_id=?',(request_id,session.account)).fetchone() is not None
+    def settle_tokens(self, session, request_id, actual_tokens):
+        if not isinstance(session,AccountSession) or not isinstance(request_id,str) or not re.fullmatch(r'[0-9a-f]{32}',request_id):raise ValueError('invalid claim')
+        if type(actual_tokens) is not int or not 0<=actual_tokens<=100_000_000:raise ValueError('invalid usage')
+        with self._connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                row=db.execute('SELECT reserved_tokens,settled_tokens FROM token_reservations WHERE request_id=? AND account_id=?',(request_id,session.account)).fetchone()
+                if row is None or row[1] is not None:
+                    db.execute('ROLLBACK');return False
+                if actual_tokens>row[0]:
+                    db.execute("INSERT OR REPLACE INTO token_budget_halt VALUES(1,'usage_exceeded_reservation')")
+                    db.execute('COMMIT');return False
+                db.execute('UPDATE token_reservations SET settled_tokens=? WHERE request_id=?',(actual_tokens,request_id))
+                db.execute('COMMIT');return True
+            except BaseException:
+                if db.in_transaction:db.execute('ROLLBACK')
+                raise
+    def consume(self, session, request_id=None, event_id=None, reserved_tokens=None):
         if not isinstance(session,AccountSession): return False
+        if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r'[0-9a-f]{32}',request_id)):
+            raise ValueError('invalid request ID')
+        if event_id is not None and (request_id is None or not isinstance(event_id,str) or not re.fullmatch(r'[0-9a-f]{32}',event_id)):
+            raise ValueError('invalid event ID')
+        if reserved_tokens is not None and (request_id is None or type(reserved_tokens) is not int or not 1 <= reserved_tokens <= 100_000_000):raise ValueError('invalid token reservation')
         now = self.clock()
         day = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date().isoformat()
         with self._connection() as db:
@@ -147,6 +200,19 @@ class AccountStore:
                 account = db.execute('SELECT a.daily_limit FROM accounts a JOIN sessions s ON s.account_id=a.account_id WHERE s.account_id=? AND s.token_hash=? AND s.revoked=0 AND s.expires_at>?',(session.account,session.token_hash,now)).fetchone()
                 if not account:
                     db.execute('ROLLBACK'); return False
+                if request_id is not None and db.execute('SELECT 1 FROM request_claims WHERE request_id=?',(request_id,)).fetchone():
+                    db.execute('ROLLBACK'); return False
+                if reserved_tokens is not None:
+                    if db.execute('SELECT 1 FROM token_budget_halt WHERE singleton=1').fetchone():
+                        db.execute('ROLLBACK');return False
+                    limit=db.execute('SELECT daily_tokens FROM token_limits WHERE account_id=?',(session.account,)).fetchone()
+                    global_tokens=db.execute('SELECT daily_tokens FROM global_token_limit WHERE singleton=1').fetchone()
+                    # Unsettled requests remain reserved across day boundaries: the
+                    # upstream may have charged them even when its response was lost.
+                    account_used=db.execute('SELECT COALESCE(SUM(COALESCE(settled_tokens,reserved_tokens)),0) FROM token_reservations WHERE account_id=? AND (day=? OR settled_tokens IS NULL)',(session.account,day)).fetchone()[0]
+                    all_used=db.execute('SELECT COALESCE(SUM(COALESCE(settled_tokens,reserved_tokens)),0) FROM token_reservations WHERE day=? OR settled_tokens IS NULL',(day,)).fetchone()[0]
+                    if not limit or not global_tokens or account_used+reserved_tokens>limit[0] or all_used+reserved_tokens>global_tokens[0]:
+                        db.execute('ROLLBACK'); return False
                 guest = db.execute('SELECT lifetime_seconds,used_seconds,lifetime_requests,used_requests FROM guest_accounts WHERE account_id=?',(session.account,)).fetchone()
                 if guest and (guest[1] >= guest[0] or guest[3] >= guest[2]):
                     db.execute('ROLLBACK'); return False
@@ -166,6 +232,10 @@ class AccountStore:
                     db.execute('UPDATE guest_accounts SET used_requests=used_requests+1 WHERE account_id=?',(session.account,))
                 db.execute('INSERT INTO daily_usage(account_id,day,requests) VALUES(?,?,1) ON CONFLICT(account_id,day) DO UPDATE SET requests=requests+1',(session.account,day))
                 db.execute('INSERT INTO global_usage(day,requests,speech_seconds) VALUES(?,1,0) ON CONFLICT(day) DO UPDATE SET requests=requests+1',(day,))
+                if request_id is not None:
+                    db.execute('INSERT INTO request_claims(request_id,account_id,created_at,event_id) VALUES(?,?,?,?)',(request_id,session.account,now,event_id))
+                if reserved_tokens is not None:
+                    db.execute('INSERT INTO token_reservations(request_id,account_id,day,reserved_tokens) VALUES(?,?,?,?)',(request_id,session.account,day,reserved_tokens))
                 db.execute('COMMIT'); return True
             except BaseException:
                 if db.in_transaction: db.execute('ROLLBACK')

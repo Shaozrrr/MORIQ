@@ -15,9 +15,9 @@ def _verified_tls_context():
  return context
 
 class ControlledDeepSeekProvider:
- def __init__(self,key):
+ def __init__(self,key,*,metrics=None):
   if not isinstance(key,str) or not key or not key.isascii() or any(not 33<=ord(c)<=126 for c in key):raise ValueError('invalid credential')
-  self._key=key
+  self._key=key;self._metrics=metrics
  async def __call__(self,source,target):return await self.translate_with_context(source,target,'')
  async def translate_with_context(self,source,target,context,*,diagnostic=None):
   if not isinstance(source,str) or not source.strip() or len(source)>4000 or not isinstance(context,str) or len(context)>512 or target not in ('zh-Hans','en-US'):raise DeepLExperimentError('invalid_response')
@@ -29,22 +29,31 @@ class ControlledDeepSeekProvider:
   def send():
    with _SLOTS:
     if cancelled.is_set():raise TimeoutError()
-    tls=_verified_tls_context()
-    conn=http.client.HTTPSConnection('api.deepseek.com',timeout=3,context=tls);started=time.monotonic();status=None;outcome='error'
+    event=self._metrics.start(kind='translation',provider='deepseek',model='deepseek-flash') if self._metrics is not None else None
+    conn=None;started=time.monotonic();status=None;outcome='error'
     try:
+     tls=_verified_tls_context()
+     conn=http.client.HTTPSConnection('api.deepseek.com',timeout=3,context=tls)
      if cancelled.is_set():raise TimeoutError()
+     if event is not None:event.mark_dispatch()
      conn.request('POST','/chat/completions',body=body,headers={'Authorization':'Bearer '+self._key,'Content-Type':'application/json'})
      response=conn.getresponse();status=response.status
+     if event is not None:event.mark_provider_response()
      if status!=200:outcome='http_error';raise DeepLExperimentError({401:'auth',402:'quota',429:'rate_limit'}.get(status,'http_error'))
      raw=response.read(32769)
      if len(raw)>32768:raise DeepLExperimentError('invalid_response')
-     data=json.loads(raw);choice=data['choices'][0]
+     data=json.loads(raw)
+     if event is not None:event.observe_usage(data.get('usage'),final=True)
+     choice=data['choices'][0]
      if choice.get('finish_reason')!='stop':raise DeepLExperimentError('invalid_response')
      text=choice['message']['content']
      if not isinstance(text,str) or not text.strip() or len(text)>4000:raise DeepLExperimentError('invalid_response')
      outcome='ok';return text
     finally:
-     conn.close()
+     if conn is not None:conn.close()
+     if event is not None:
+      try:event.finish('cancelled' if cancelled.is_set() else ('success' if outcome=='ok' else 'failure'),retries=0)
+      except Exception:self._metrics.poison() # preserve unknown and refuse new calls
      if diagnostic:
       try:diagnostic({'stage':'http','outcome':outcome,'status':status if type(status) is int and 100<=status<=599 else None,'elapsed_ms':round((time.monotonic()-started)*1000)})
       except Exception:pass

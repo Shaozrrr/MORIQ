@@ -9,7 +9,7 @@ MOUNT = Path('/data')
 DIRECTORY = MOUNT / 'moriq'
 DATABASE = DIRECTORY / 'accounts.db'
 SCRIPTS = {'bootstrap': '/app/deploy/bootstrap_personal_volume.py',
-           'serve': '/app/deploy/start_railway_staging.py'}
+           'serve': '/app/deploy/unified_candidate.py'}
 
 
 def private(path, *, directory=False):
