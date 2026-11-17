@@ -19,7 +19,7 @@ def validate_upstream(upstream,*,testing=False):
  u=urllib.parse.urlsplit(upstream)
  if u.username is not None or u.password is not None or u.query or u.fragment or u.path!='/v1/chat/completions' or not u.hostname:raise ValueError('invalid upstream')
  if u.scheme=='https' and u.hostname=='api.example-provider.invalid' and u.port in (None,443):return
- if testing and u.scheme=='https' and u.hostname=='api.deepseek.com' and u.port in (None,443):return
+ if u.scheme=='https' and u.hostname=='api.deepseek.com' and u.port in (None,443):return
  if testing and u.scheme=='http' and u.hostname=='127.0.0.1' and u.port:return
  raise ValueError('upstream not allowed')
 
@@ -68,7 +68,7 @@ def make_app(gateway,upstream,*,testing=False,max_concurrent=2,body_timeout=5,re
       if resp.status!=200:return web.Response(status=502,headers={'MORIQ-Error-Code':'UPSTREAM_HTTP_ERROR','MORIQ-Upstream-Status':str(resp.status)})
       if resp.content_type!='text/event-stream':return web.Response(status=502,headers={'MORIQ-Error-Code':'RESPONSE_INVALID'})
       if await asyncio.to_thread(gateway.account_store.authenticate,account.token_hash)!=account:return web.Response(status=401)
-      output=web.StreamResponse(status=200,headers={'Content-Type':'text/event-stream','Cache-Control':'no-store'});await output.prepare(request);state['response_started']=True;total=0;pending=b'';done=False
+      output=web.StreamResponse(status=200,headers={'Content-Type':'text/event-stream','Cache-Control':'no-store'});await output.prepare(request);state['response_started']=True;total=0;pending=b'';done=False;final_usage_candidate=False
       async for block in resp.content.iter_any():
        if await asyncio.to_thread(gateway.account_store.authenticate,account.token_hash)!=account:break
        total+=len(block)
@@ -77,19 +77,27 @@ def make_app(gateway,upstream,*,testing=False,max_concurrent=2,body_timeout=5,re
        while b'\n' in pending:
         line,pending=pending.split(b'\n',1)
         if len(line)>65536:raise ValueError('SSE line too large')
-        if event is not None and line.startswith(b'data: {'):
+        if event is not None and line.startswith(b'data:') and line.rstrip(b'\r')!=b'data: [DONE]':
+         final_usage_candidate=False
          try:
-          event.observe_usage(json.loads(line[6:]).get('usage'))
+          chunk=json.loads(line[5:].strip());usage=chunk.get('usage');choices=chunk.get('choices')
+          event.observe_usage(usage)
+          # DeepSeek documents usage on the last chunk, accompanied by a
+          # non-null finish_reason. Earlier usage cannot settle a reservation.
+          values=(usage.get('prompt_tokens'),usage.get('completion_tokens')) if isinstance(usage,dict) else None
+          total_tokens=usage.get('total_tokens') if isinstance(usage,dict) else None
+          final_usage_candidate=(isinstance(choices,list) and len(choices)==1 and isinstance(choices[0],dict) and isinstance(choices[0].get('finish_reason'),str) and bool(choices[0]['finish_reason']) and values is not None and all(type(v) is int and 0<=v<=10**9 for v in values) and type(total_tokens) is int and total_tokens==sum(values) and event.usage is not None and values==event.usage[:2])
          except (ValueError,AttributeError):pass
         if line.rstrip(b'\r')==b'data: [DONE]':
          if event is not None:
-          event.mark_usage_final();state['finish_attempted']=True
+          if final_usage_candidate:event.mark_usage_final()
+          state['finish_attempted']=True
           try:await asyncio.to_thread(event.finish,'success',retries=0)
           except Exception:
            recorder.poison()
            if request.transport:request.transport.abort()
            raise asyncio.CancelledError() from None
-          if reserved_tokens is not None and event.usage is not None:
+          if reserved_tokens is not None and event.usage_final and event.usage is not None:
            try:
             settled=await asyncio.to_thread(gateway.account_store.settle_tokens,account,claim_id,event.usage[0]+event.usage[1])
             if not settled:raise ValueError('token settlement failed')
