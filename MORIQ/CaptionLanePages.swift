@@ -197,4 +197,3 @@ struct CaptionLanePages {
         return result
     }
 }
-
