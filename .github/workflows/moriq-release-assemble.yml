@@ -1,0 +1,29 @@
+name: Assemble MORIQ beta installer
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Assemble and verify installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          release=452590642
+          mkdir -p "$RUNNER_TEMP/moriq-parts"
+          gh api "repos/$repo/releases/$release/assets?per_page=100" --paginate --jq '.[] | select(.name | startswith("MORIQ.part.")) | [.name, (.id|tostring), .state] | @tsv' > "$RUNNER_TEMP/parts.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/parts.tsv")" -eq 128
+          while IFS=$'\t' read -r name id state; do
+            test "$state" = uploaded
+            curl --fail --silent --show-error --location --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/octet-stream' "https://api.github.com/repos/$repo/releases/assets/$id" -o "$RUNNER_TEMP/moriq-parts/$name"
+          done < "$RUNNER_TEMP/parts.tsv"
+          cat "$RUNNER_TEMP"/moriq-parts/MORIQ.part.* > "$RUNNER_TEMP/MORIQ.dmg"
+          echo 'cd84a19884c0955dc13e93304387a02d75a7796ebc0dd39b32edb40cc3bbc68d  '"$RUNNER_TEMP/MORIQ.dmg" | sha256sum -c -
+          curl --fail --silent --show-error --retry 2 -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Content-Type: application/octet-stream' --upload-file "$RUNNER_TEMP/MORIQ.dmg" "https://uploads.github.com/repos/$repo/releases/$release/assets?name=MORIQ.dmg" > "$RUNNER_TEMP/upload.json"
+          python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); assert a["state"] == "uploaded" and a["size"] == 1069625513; print("Installer uploaded:",a["name"],a["size"],a.get("digest"))' "$RUNNER_TEMP/upload.json"
