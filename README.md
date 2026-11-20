@@ -45,7 +45,7 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 MORIQ 面向 **macOS 15 或更高版本**，同一安装包支持 Apple 芯片和 Intel 芯片。
 
-[下载好友测试版](https://github.com/Shaozrrr/MORIQ/releases/tag/v0.1.0-friends-beta) · 下载 DMG 后打开，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
+[下载 MORIQ 内测版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-friends-beta/MORIQ.dmg) · 下载 DMG 后打开，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
 
 首次使用时，应用会引导你了解所需权限。截图、系统音频字幕和部分桌面交互分别需要相应的 macOS 权限；具体说明会在应用内提供。
 
@@ -53,7 +53,7 @@ MORIQ 面向 **macOS 15 或更高版本**，同一安装包支持 Apple 芯片�
 
 ## 当前进度
 
-MORIQ 仍处于好友测试阶段。安装包已通过 Apple 公证，支持 Apple 和 Intel 芯片；Intel 真机及其他 Mac 的安装体验尚待验证。
+MORIQ 仍处于内测阶段。安装包已通过 Apple 公证，支持 Apple 和 Intel 芯片；Intel 真机及其他 Mac 的安装体验尚待验证。
 
 实时字幕的在线识别与翻译需要网络及可用的 MORIQ 服务，实际效果会随语言、网络和声音环境变化。
 
