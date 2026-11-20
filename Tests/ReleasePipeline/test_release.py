@@ -225,4 +225,20 @@ class ReleaseTests(unittest.TestCase):
    self.assertIs(info['MORIQCaptionPunctAvailable'],True)
    self.assertEqual(info['MORIQCaptionAutomaticMode'],'trusted-v1')
 
+ def test_native_only_disables_automatic_translation(self):
+  speech='wss://service.moriq.examplehost.com/v1/speech/stream'
+  with tempfile.TemporaryDirectory(prefix='moriq-release-native-') as d:
+   out=Path(d)/'build'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):
+    m.build(str(out),speech_endpoint=speech,native_only=True)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertEqual(info['MORIQNativeCaptionMode'],'batch-v1')
+   self.assertNotIn('MORIQCaptionAutomaticMode',info)
+   with self.assertRaises(m.ReleaseError):
+    m.build(str(Path(d)/'invalid'),speech_endpoint=speech,native_only=True,caption_punct_available=True)
+
 if __name__=='__main__': unittest.main()
