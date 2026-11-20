@@ -200,6 +200,7 @@ class AccountStore:
                 account = db.execute('SELECT a.daily_limit FROM accounts a JOIN sessions s ON s.account_id=a.account_id WHERE s.account_id=? AND s.token_hash=? AND s.revoked=0 AND s.expires_at>?',(session.account,session.token_hash,now)).fetchone()
                 if not account:
                     db.execute('ROLLBACK'); return False
+                anonymous = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone() and db.execute('SELECT 1 FROM anonymous_accounts_v1 WHERE account_id=?',(session.account,)).fetchone())
                 if request_id is not None and db.execute('SELECT 1 FROM request_claims WHERE request_id=?',(request_id,)).fetchone():
                     db.execute('ROLLBACK'); return False
                 if reserved_tokens is not None:
@@ -211,7 +212,7 @@ class AccountStore:
                     # upstream may have charged them even when its response was lost.
                     account_used=db.execute('SELECT COALESCE(SUM(COALESCE(settled_tokens,reserved_tokens)),0) FROM token_reservations WHERE account_id=? AND (day=? OR settled_tokens IS NULL)',(session.account,day)).fetchone()[0]
                     all_used=db.execute('SELECT COALESCE(SUM(COALESCE(settled_tokens,reserved_tokens)),0) FROM token_reservations WHERE day=? OR settled_tokens IS NULL',(day,)).fetchone()[0]
-                    if not limit or not global_tokens or account_used+reserved_tokens>limit[0] or all_used+reserved_tokens>global_tokens[0]:
+                    if not global_tokens or (not anonymous and (not limit or account_used+reserved_tokens>limit[0])) or all_used+reserved_tokens>global_tokens[0]:
                         db.execute('ROLLBACK'); return False
                 guest = db.execute('SELECT lifetime_seconds,used_seconds,lifetime_requests,used_requests FROM guest_accounts WHERE account_id=?',(session.account,)).fetchone()
                 if guest and (guest[1] >= guest[0] or guest[3] >= guest[2]):
@@ -219,7 +220,7 @@ class AccountStore:
                 count = db.execute('SELECT requests FROM daily_usage WHERE account_id=? AND day=?',(session.account,day)).fetchone()
                 global_limit = db.execute('SELECT daily_requests FROM global_limits WHERE singleton=1').fetchone()
                 global_used = db.execute('SELECT requests FROM global_usage WHERE day=?',(day,)).fetchone()
-                if not global_limit or (global_used and global_used[0] >= global_limit[0]) or (count and count[0] >= account[0]):
+                if not global_limit or (global_used and global_used[0] >= global_limit[0]) or (not anonymous and count and count[0] >= account[0]):
                     db.execute('ROLLBACK'); return False
                 if self.requests_per_minute is not None:
                     minute = int(now // 60)
@@ -249,11 +250,12 @@ class AccountStore:
             try:
                 db.execute('BEGIN IMMEDIATE')
                 row = db.execute('SELECT l.daily_seconds FROM speech_limits l JOIN sessions s ON s.account_id=l.account_id WHERE s.account_id=? AND s.token_hash=? AND s.revoked=0 AND s.expires_at>?',(session.account,session.token_hash,now)).fetchone()
+                anonymous = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone() and db.execute('SELECT 1 FROM anonymous_accounts_v1 WHERE account_id=?',(session.account,)).fetchone())
                 used = db.execute('SELECT seconds FROM speech_usage WHERE account_id=? AND day=?',(session.account,day)).fetchone()
                 global_limit = db.execute('SELECT daily_speech_seconds FROM global_limits WHERE singleton=1').fetchone()
                 global_used = db.execute('SELECT speech_seconds FROM global_usage WHERE day=?',(day,)).fetchone()
                 guest = db.execute('SELECT lifetime_seconds,used_seconds FROM guest_accounts WHERE account_id=?',(session.account,)).fetchone()
-                if not row or not global_limit or (global_used[0] if global_used else 0) + seconds > global_limit[0] or (used[0] if used else 0) + seconds > row[0] or (guest and guest[1]+seconds>guest[0]):
+                if not row or not global_limit or (global_used[0] if global_used else 0) + seconds > global_limit[0] or (not anonymous and (used[0] if used else 0) + seconds > row[0]) or (guest and guest[1]+seconds>guest[0]):
                     db.execute('ROLLBACK'); return False
                 if guest:
                     db.execute('UPDATE guest_accounts SET used_seconds=used_seconds+? WHERE account_id=?',(seconds,session.account))

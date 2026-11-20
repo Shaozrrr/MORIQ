@@ -29,6 +29,13 @@ class DeviceSessions:
       AND (d.revoked!=0 OR d.expires_at<=? OR NOT EXISTS (
        SELECT 1 FROM device_scopes_v1 s WHERE s.device_hash=d.device_hash AND s.scope='speech'))
     )''',(now,))
+    # The legacy server does not understand the anonymous account policy.
+    # Fail closed during rollback while preserving the durable device identity
+    # so a new session can be issued once the new service is restored.
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone():
+     db.execute('''UPDATE sessions SET revoked=1 WHERE token_hash IN (
+      SELECT d.session_hash FROM device_sessions_v2 d JOIN anonymous_accounts_v1 a ON a.device_hash=d.device_hash
+      WHERE d.session_hash IS NOT NULL)''')
     db.execute('COMMIT')
    except BaseException:
     if db.in_transaction:db.execute('ROLLBACK')
@@ -60,9 +67,14 @@ class DeviceSessions:
    try:
     db.execute('BEGIN IMMEDIATE')
     if db.execute('SELECT mode FROM device_issuance_control_v1 WHERE singleton=1').fetchone()!=('active',):db.execute('ROLLBACK');return False
-    row=db.execute("SELECT account_id,session_hash,expires_at FROM device_sessions_v2 d WHERE device_hash=? AND revoked=0 AND expires_at>? AND EXISTS (SELECT 1 FROM device_scopes_v1 s WHERE s.device_hash=d.device_hash AND s.scope='speech')",(dh,now)).fetchone()
+    anonymous_table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone()
+    anonymous=bool(anonymous_table and db.execute('SELECT 1 FROM anonymous_accounts_v1 WHERE device_hash=?',(dh,)).fetchone())
+    row=db.execute("SELECT account_id,session_hash,expires_at FROM device_sessions_v2 d WHERE device_hash=? AND revoked=0 AND (expires_at>? OR ?=1) AND EXISTS (SELECT 1 FROM device_scopes_v1 s WHERE s.device_hash=d.device_hash AND s.scope='speech')",(dh,now,int(anonymous))).fetchone()
     if row is None:db.execute('ROLLBACK');return False
     account,previous,device_expiry=row
+    if anonymous and device_expiry <= now:
+     device_expiry=now+7776000
+     db.execute('UPDATE device_sessions_v2 SET expires_at=? WHERE device_hash=?',(device_expiry,dh))
     if previous==ah:
      active=db.execute('SELECT 1 FROM sessions WHERE token_hash=? AND account_id=? AND revoked=0 AND expires_at>?',(ah,account,now)).fetchone()
      db.execute('ROLLBACK');return active is not None
@@ -101,9 +113,14 @@ class DeviceSessions:
    try:
     db.execute('BEGIN IMMEDIATE')
     if db.execute('SELECT mode FROM device_issuance_control_v1 WHERE singleton=1').fetchone()!=('active',):db.execute('ROLLBACK');return False
-    row=db.execute("SELECT account_id,session_hash,expires_at FROM device_sessions_v2 d WHERE device_hash=? AND revoked=0 AND expires_at>? AND EXISTS (SELECT 1 FROM device_scopes_v1 s WHERE s.device_hash=d.device_hash AND s.scope='speech')",(dh,now)).fetchone()
+    anonymous_table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone()
+    anonymous=bool(anonymous_table and db.execute('SELECT 1 FROM anonymous_accounts_v1 WHERE device_hash=?',(dh,)).fetchone())
+    row=db.execute("SELECT account_id,session_hash,expires_at FROM device_sessions_v2 d WHERE device_hash=? AND revoked=0 AND (expires_at>? OR ?=1) AND EXISTS (SELECT 1 FROM device_scopes_v1 s WHERE s.device_hash=d.device_hash AND s.scope='speech')",(dh,now,int(anonymous))).fetchone()
     if row is None:db.execute('ROLLBACK');return False
     account,previous,device_expiry=row
+    if anonymous and device_expiry <= now:
+     device_expiry=now+7776000
+     db.execute('UPDATE device_sessions_v2 SET expires_at=? WHERE device_hash=?',(device_expiry,dh))
     prior=db.execute('SELECT expected_generation,session_hash FROM device_renewals_v1 WHERE device_hash=? AND operation_id=?',(dh,operation_id)).fetchone()
     if prior is not None:
      active=prior==(expected_generation,ah) and previous==ah and db.execute('SELECT 1 FROM sessions WHERE token_hash=? AND account_id=? AND revoked=0 AND expires_at>?',(ah,account,now)).fetchone() is not None
