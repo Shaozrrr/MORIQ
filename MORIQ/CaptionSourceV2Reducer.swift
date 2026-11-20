@@ -120,7 +120,9 @@ struct CaptionLocalTranslationQueue {
     }
 
     @discardableResult mutating func enqueue(_ marker: SourceMarker, confirmed: String) -> Bool {
-        guard !hasFailure, order.count < 1024, marker.session == session, marker.epoch == epoch,
+        guard !hasFailure else { return false }
+        if order.count >= 1024 { hasFailure = true; pending.removeAll(); return false }
+        guard marker.session == session, marker.epoch == epoch,
               marker.revision > 0, expected[marker.unit] == nil else { return false }
         let bytes = Array(confirmed.utf8)
         guard marker.start_byte >= 0, marker.end_byte > marker.start_byte,
