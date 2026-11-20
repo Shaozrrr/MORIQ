@@ -74,6 +74,7 @@ class MemorySourceLedger:
     try:
      db.execute('BEGIN IMMEDIATE')
      if not self._auth(db,account):raise PermissionError('unauthorized')
+     anonymous=bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone() and db.execute('SELECT 1 FROM anonymous_accounts_v1 WHERE account_id=?',(account.account,)).fetchone())
      guest=db.execute('SELECT lifetime_seconds,used_seconds,lifetime_requests,used_requests FROM guest_accounts WHERE account_id=?',(account.account,)).fetchone()
      if guest and (guest[1]>=guest[0] or guest[3]>=guest[2]):raise PermissionError('quota')
      lim=db.execute('SELECT daily_limit FROM accounts WHERE account_id=?',(account.account,)).fetchone()
@@ -83,7 +84,7 @@ class MemorySourceLedger:
      chars=db.execute('SELECT characters FROM volatile_source_chars WHERE account_id=? AND day=?',(account.account,day)).fetchone()
      gc=db.execute('SELECT characters FROM volatile_source_global_chars WHERE day=?',(day,)).fetchone()
      count=len(text)+context_cost
-     if not lim or not gl or (used[0] if used else 0)>=lim[0] or (gu[0] if gu else 0)>=gl[0] or (chars[0] if chars else 0)+count>20000 or (gc[0] if gc else 0)+count>100000:raise PermissionError('quota')
+     if not lim or not gl or (not anonymous and ((used[0] if used else 0)>=lim[0] or (chars[0] if chars else 0)+count>20000)) or (gu[0] if gu else 0)>=gl[0] or (gc[0] if gc else 0)+count>100000:raise PermissionError('quota')
      if self.accounts.requests_per_minute is not None:
       minute=int(now//60);rate=db.execute('SELECT requests FROM minute_usage WHERE account_id=? AND minute=?',(account.account,minute)).fetchone()
       if rate and rate[0]>=self.accounts.requests_per_minute:raise PermissionError('quota')
