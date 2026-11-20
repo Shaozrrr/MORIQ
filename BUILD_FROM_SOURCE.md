@@ -32,3 +32,5 @@ xcodebuild -project MORIQ.xcodeproj -scheme MORIQ -configuration Debug build
 本地网关仅用于回环测试。产品账号、身份与配额、正式服务地址、语音服务凭据和服务端部署均不随仓库提供；不要把密钥写入客户端或仓库。
 
 当前开发中的多人说话人原型依赖更新过的 `moriq-speech` 与单独的 FluidAudio 说话人辅助程序；现有 runtime-v2 分卷仍是旧版，不包含该原型。两路字幕/同声传译代码已在开发中，说话人模型、词时间、姓名识别及对应发行资产尚未接入正式应用或完成验收，不能将本分支当作已支持说话人识别的正式发行版。
+
+发行镜像使用 `dmgbuild` 设置 Finder 背景、图标位置和磁盘图标。打包前请在独立 Python 环境中安装 `Tools/Release/requirements.txt`；`Tools/Release/moriq_release.py package` 会先校验镜像内应用的签名和完整性，再签署 DMG。发行仍需使用有效的 Developer ID 单独完成公证与附票。

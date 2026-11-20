@@ -247,11 +247,12 @@ struct SettingsView: View {
                 Spacer()
                 Toggle("触觉反馈", isOn: $hapticsEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }.frame(minHeight: 70)
+            #if DEBUG
             Divider()
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("本机诊断记录").font(.system(size: 13, weight: .semibold))
-                    Text("仅本机记录结果与耗时分档，不上传。运行时清理 7 天前数据，上限 512 KB；关闭后停止记录并保留旧记录。未知或损坏记录会暂停清理，空间不足时暂停写入，可手动清除。")
+                    Text("诊断记录").font(.system(size: 13, weight: .semibold))
+                    Text("仅保存在本机，用于排查问题")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -265,26 +266,13 @@ struct SettingsView: View {
                     } }
             }.frame(minHeight: 70)
             HStack {
-                Button("查看本机诊断汇总") {
-                    LocalDiagnostics.shared.summary { counts in
-                        localDiagnosticCounts = counts
-                        let health=LocalDiagnostics.shared.health()
-                        let base=counts.isEmpty ? "暂无记录" : "共 \(counts.values.reduce(0,+)) 条事件，仅保存在本机"
-                        localDiagnosticMessage = base + "；本次队列丢弃 \(health.dropped) 条、写入失败 \(health.writeFailures) 条、容量轮转 \(health.capacityEvictions) 条"
-                    }
-                }
-                Button("清除本机诊断记录") {
+                Button("清除记录") {
                     LocalDiagnostics.shared.clear { ok in localDiagnosticCounts = [:]; localDiagnosticMessage = ok ? "已清除" : "无法清除" }
                 }
                 Text(localDiagnosticMessage).font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }.font(.system(size: 11)).frame(minHeight: 42)
-            if !localDiagnosticCounts.isEmpty {
-                Text("开始与结束分别计为事件，不等于使用次数；字幕启动成功仅表示采集已启动。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
-                Text(DiagnosticFeature.allCases.compactMap { feature in localDiagnosticCounts[feature].map { "\(feature.label) \($0)" } }.joined(separator: "  ·  "))
-                    .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 12)
-            }
+            #endif
             if Bundle.main.object(forInfoDictionaryKey: "MORIQManagedSpeechEndpoint") != nil {
                 Divider()
                 HStack {
