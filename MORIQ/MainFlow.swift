@@ -5,18 +5,36 @@ import Speech
 
 @MainActor final class AppFlow: ObservableObject {
     enum Page { case introduction, permissions, settings, demo(Feature), connection, screenshotEditor(CGImage), conversionResults }
-    @Published var page: Page = UserDefaults.standard.bool(forKey: "moriq.introComplete") ? .permissions : .introduction
+    @Published var page: Page
     @Published var notice: String?
     @Published var conversionResults: [ConversionRecord] = []
-    @Published var autoEnterWhenReady = UserDefaults.standard.bool(forKey: "moriq.completedFirstEntry")
-    var introComplete = UserDefaults.standard.bool(forKey: "moriq.introComplete")
+    @Published var autoEnterWhenReady: Bool
+    var introComplete: Bool
+    private let defaults: UserDefaults
+    private let allowSystemPermissions: Bool
+    init(defaults: UserDefaults = .standard, allowSystemPermissions: Bool = true) {
+        self.defaults = defaults
+        self.allowSystemPermissions = allowSystemPermissions
+        let complete = defaults.bool(forKey: "moriq.introComplete")
+        page = complete ? .permissions : .introduction
+        introComplete = complete
+        autoEnterWhenReady = defaults.bool(forKey: "moriq.completedFirstEntry")
+    }
+    func completeIntroduction() {
+        introComplete = true; defaults.set(true, forKey: "moriq.introComplete"); page = .permissions
+    }
     var onFirstEntry: (() -> Void)?
     private var entered = false
-    var mayEnter: Bool { CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() && FolderAccessProbe.verifiedThisLaunch && DirectScreenAccessProbe.verifiedThisLaunch && CaptionAudioPermissionProbe.verifiedThisLaunch }
+    var mayEnter: Bool {
+        guard allowSystemPermissions else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused system permission inspection\n".utf8)); return false
+        }
+        return CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() && FolderAccessProbe.verifiedThisLaunch && DirectScreenAccessProbe.verifiedThisLaunch && CaptionAudioPermissionProbe.verifiedThisLaunch
+    }
     func enterSettings() {
         guard introComplete else { page = .introduction; return }
         guard mayEnter else { page = .permissions; return }
-        UserDefaults.standard.set(true, forKey: "moriq.completedFirstEntry")
+        defaults.set(true, forKey: "moriq.completedFirstEntry")
         autoEnterWhenReady = false
         page = .settings
         if !entered { entered = true; onFirstEntry?() }
@@ -41,7 +59,7 @@ struct MainFlowView: View {
             }
             switch flow.page {
             case .introduction:
-                FeatureIntroduction { flow.introComplete = true; UserDefaults.standard.set(true, forKey: "moriq.introComplete"); flow.page = .permissions }
+                FeatureIntroduction { flow.completeIntroduction() }
             case .permissions:
                 PermissionOnboardingView(finish: { flow.enterSettings() }, back: { flow.autoEnterWhenReady = false; flow.page = .introduction }, autoEnterWhenReady: flow.autoEnterWhenReady)
             case .settings:

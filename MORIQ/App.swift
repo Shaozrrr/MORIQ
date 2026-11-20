@@ -44,11 +44,37 @@ struct MORIQApp: App {
     var body: some Scene { Settings { EmptyView() } }
 }
 @MainActor final class AppCoordinator: NSObject, NSApplicationDelegate {
-    private let settings = SettingsStore()
-    private let flow = AppFlow()
+    // Evaluated before any stored product coordinator or data store.
+    private let runtimeEnvironment = RuntimeEnvironment.requireSafeProcess()
+    private let settings: SettingsStore = {
+        let environment = RuntimeEnvironment.requireSafeProcess()
+        guard let defaults = environment.defaults() else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused unavailable defaults domain\n".utf8))
+            exit(78)
+        }
+        return SettingsStore(defaults: defaults)
+    }()
+    private let flow: AppFlow = {
+        let environment = RuntimeEnvironment.requireSafeProcess()
+        guard let defaults = environment.defaults() else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused unavailable flow defaults domain\n".utf8))
+            exit(78)
+        }
+        return AppFlow(defaults: defaults, allowSystemPermissions: environment.mode == .product)
+    }()
     private let assistant = AssistantCoordinator()
-    private let converter = ConversionCoordinator()
+    private let converter: ConversionCoordinator = {
+        let environment = RuntimeEnvironment.requireSafeProcess()
+        return ConversionCoordinator(allowSystemDrag: environment.mode == .product)
+    }()
     private let shelf: ShelfCoordinator = {
+        let environment = RuntimeEnvironment.requireSafeProcess()
+        if environment.mode == .internalIsolated {
+            guard let defaults = environment.defaults() else {
+                FileHandle.standardError.write(Data("MORIQ runtime refused unavailable shelf defaults\n".utf8)); exit(78)
+            }
+            return ShelfCoordinator(store: ShelfStore(defaults: defaults), allowSystemDrag: false)
+        }
         #if DEBUG
         if (CommandLine.arguments.contains("--preview-shelf") || CommandLine.arguments.contains("--preview-shelf-only")), let isolated = UserDefaults(suiteName: "local.moriq.tests.shelf") {
             return ShelfCoordinator(store: ShelfStore(defaults: isolated))
@@ -56,7 +82,16 @@ struct MORIQApp: App {
         #endif
         return ShelfCoordinator()
     }()
+    private var syntheticClipboardBoard: NSPasteboard?
     private lazy var clipboard: ClipboardCoordinator = {
+        if runtimeEnvironment.mode == .internalIsolated {
+            guard let defaults = runtimeEnvironment.defaults() else {
+                FileHandle.standardError.write(Data("MORIQ runtime refused unavailable clipboard defaults\n".utf8)); exit(78)
+            }
+            let board = NSPasteboard(name: NSPasteboard.Name("local.moriq.internal.synthetic-clipboard.\(UUID().uuidString)"))
+            syntheticClipboardBoard = board
+            return ClipboardCoordinator(store: ClipboardStore(board: board, persistent: false, defaults: defaults))
+        }
         #if DEBUG
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--verify-app-clipboard-quit"), args.count > index + 1 {
@@ -75,7 +110,11 @@ struct MORIQApp: App {
     private let captions = LiveCaptionsCoordinator()
     private let screenshot = ScreenshotCoordinator()
     private let inlineScreenshot = ScreenshotInlineCoordinator()
-    private let stickyNotes = StickyNotesCoordinator()
+    private let stickyNotes: StickyNotesCoordinator = {
+        let environment = RuntimeEnvironment.requireSafeProcess()
+        guard environment.mode == .internalIsolated else { return StickyNotesCoordinator() }
+        return StickyNotesCoordinator(inMemory: true)
+    }()
     private var mainWindow: NSWindow?
     private var statusItem: NSStatusItem?
     #if DEBUG
@@ -154,7 +193,32 @@ struct MORIQApp: App {
     }
     #endif
     func applicationDidFinishLaunching(_ notification: Notification) {
+        LocalDiagnostics.shared.record(.startup, .launch, .success)
         #if DEBUG
+        if CommandLine.arguments.contains("--verify-diagnostics-conversion") {
+            Task { @MainActor in
+                guard let suiteName=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_SUITE"], let defaults=UserDefaults(suiteName:suiteName), let logPath=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_FILE"] else {exit(2)}
+                defaults.set(true,forKey:LocalDiagnostics.enabledKey)
+                let root=FileManager.default.temporaryDirectory.appendingPathComponent("moriq-conversion-diag-"+UUID().uuidString)
+                do {
+                    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+                    let good=root.appendingPathComponent("good.png"),bad=root.appendingPathComponent("bad.png")
+                    guard let bitmap=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:8,pixelsHigh:8,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0),let data=bitmap.representation(using:.png,properties:[:]) else {exit(3)}
+                    try data.write(to:good);try Data("invalid".utf8).write(to:bad)
+                    let coordinator=ConversionCoordinator(presentsNotices:false,allowSystemDrag:false)
+                    var batches=[[ConversionRecord]]();coordinator.onResults={batches.append($0)}
+                    coordinator.enqueueConversion([good],to:.jpeg);coordinator.enqueueConversion([bad],to:.jpeg)
+                    for _ in 0..<200 {if batches.count==2 {break};try await Task.sleep(for:.milliseconds(25))}
+                    guard batches.count==2,batches[0][0].output != nil,batches[1][0].output == nil else {exit(4)}
+                    LocalDiagnostics.shared.flushForTesting()
+                    let events=try Data(contentsOf:URL(fileURLWithPath:logPath)).split(separator:10).map {try JSONDecoder().decode(DiagnosticEvent.self,from:Data($0))}
+                    guard events.contains(where:{$0.feature == .conversion && $0.outcome == .success && $0.inputFormat == .image && $0.outputFormat == .image && $0.countBucket == .one}),events.contains(where:{$0.feature == .conversion && $0.outcome == .failure && $0.inputFormat == .image && $0.error != nil}) else {exit(5)}
+                    try? FileManager.default.removeItem(at:root);try? FileManager.default.removeItem(atPath:logPath);defaults.removePersistentDomain(forName:suiteName)
+                    print("PASS actual conversion success/failure categorized without file data");fflush(stdout);exit(0)
+                } catch {let e=error as NSError;print("FAIL conversion fixture",e.domain,e.code);fflush(stdout);exit(1)}
+            }
+            return
+        }
         if CommandLine.arguments.contains("--verify-app-clipboard-quit") {
             _ = clipboard
             guard let board = QuitFixture.board, let store = QuitFixture.store else { exit(2) }
@@ -602,12 +666,18 @@ struct MORIQApp: App {
             }
             return
         }
-        NSApp.appearance = NSAppearance(named: UserDefaults.standard.bool(forKey: "moriq.permissionDarkMode") ? .darkAqua : .aqua)
+        guard let launchDefaults = runtimeEnvironment.defaults() else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused unavailable launch defaults\n".utf8)); exit(78)
+        }
+        NSApp.appearance = NSAppearance(named: launchDefaults.bool(forKey: "moriq.permissionDarkMode") ? .darkAqua : .aqua)
         NSApp.setActivationPolicy(.accessory)
         settings.resetCaptions() // Never resume system-audio capture silently after relaunch.
         captions.onStop = { [weak self] in self?.settings.resetCaptions() }
         settings.onChange = { [weak self] feature, enabled in
             guard let self else { return false }
+            if enabled && !self.runtimeEnvironment.permits(.automaticFeatures, recordRefusal: { message in
+                FileHandle.standardError.write(Data((message + "\n").utf8))
+            }) { self.flow.notice = "内部测试已禁用系统功能。"; return false }
             if enabled && !self.flow.mayEnter { self.flow.page = .permissions; self.openMain(); return false }
             var result: OSStatus = noErr
             switch feature {
@@ -665,6 +735,16 @@ struct MORIQApp: App {
         #if DEBUG
         if CommandLine.arguments.contains("--preview-permissions") { flow.page = .permissions }
         if CommandLine.arguments.contains("--preview-settings") { flow.page = .settings }
+        #if MORIQ_INTERNAL_SMOKE
+        if CommandLine.arguments.contains("--moriq-diagnostic-ui"), runtimeEnvironment.mode == .internalIsolated, let suite=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_SUITE"], let defaults=UserDefaults(suiteName:suite) {
+            defaults.set(true,forKey:LocalDiagnostics.enabledKey)
+            LocalDiagnostics.shared.record(.conversion,.complete,.success)
+            LocalDiagnostics.shared.record(.screenshot,.complete,.failure)
+            LocalDiagnostics.shared.flushForTesting()
+            defaults.set(false,forKey:LocalDiagnostics.enabledKey)
+            flow.page = .settings
+        }
+        #endif
         if CommandLine.arguments.contains("--preview-connection") { flow.page = .connection }
         if CommandLine.arguments.contains("--preview-shelf") { shelf.enable(); flow.page = .settings }
         if CommandLine.arguments.contains("--preview-shelf-only") { shelf.enable(); return }
@@ -688,6 +768,63 @@ struct MORIQApp: App {
         }
         #endif
         openMain()
+        #if MORIQ_INTERNAL_SMOKE
+        if runtimeEnvironment.mode == .internalIsolated && CommandLine.arguments.contains("--moriq-internal-smoke") {
+            guard !flow.mayEnter, stickyNotes.store.notes.isEmpty,
+                  settings.enabled.values.allSatisfy({ !$0 }) else {
+                FileHandle.standardError.write(Data("MORIQ internal smoke refused unsafe startup state\n".utf8)); exit(79)
+            }
+            settings.binding(for: .captions).wrappedValue = true
+            guard settings.enabled[Feature.captions.rawValue] != true else {
+                FileHandle.standardError.write(Data("MORIQ internal smoke failed feature gate\n".utf8)); exit(79)
+            }
+            print("MORIQ_INTERNAL_SMOKE_STARTED_AND_GATED"); fflush(stdout)
+            #if DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL
+            if let index = CommandLine.arguments.firstIndex(of: "--moriq-fake-caption-port") {
+                guard index + 1 < CommandLine.arguments.count,
+                      let port = UInt16(CommandLine.arguments[index + 1]), port > 0,
+                      let endpoint = URL(string: "ws://127.0.0.1:\(port)/v1/speech/stream") else {
+                    FileHandle.standardError.write(Data("MORIQ internal smoke refused invalid fake endpoint\n".utf8)); exit(79)
+                }
+                captions.debugStartLocalRecovery(endpoint: endpoint)
+                Task { @MainActor [weak self] in
+                    // Wait for observable recovery instead of assuming a
+                    // particular launch and scheduling latency.
+                    for _ in 0..<160 {
+                        guard let self, let model = self.captions.debugNativeState else { break }
+                        if self.captions.debugRecoveryConnections == 2,
+                           self.captions.debugOldBatchRejected,
+                           model.status == "正在向语音服务发送\(model.audioSource.label)",
+                           model.nativeOriginal.confirmed.contains("next sentence"),
+                           model.nativeHistory.contains(where: { $0.original.contains("first sentence") }) { break }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                    guard let self, let model = self.captions.debugNativeState,
+                          let windowID = self.captions.debugNativeWindowID,
+                          NSApp.windows.contains(where: { $0.windowNumber == Int(windowID) && $0.isVisible }),
+                          self.captions.debugRecoveryConnections == 2, self.captions.debugOldBatchRejected,
+                          model.status == "正在向语音服务发送\(model.audioSource.label)",
+                          model.nativeOriginal.confirmed.contains("next sentence"),
+                          model.nativeHistory.contains(where: { $0.original.contains("first sentence") }) else {
+                        let connections = self?.captions.debugRecoveryConnections ?? -1
+                        let staleRejected = self?.captions.debugOldBatchRejected ?? false
+                        let statusReady = self?.captions.debugNativeState.map { $0.status == "正在向语音服务发送\($0.audioSource.label)" } ?? false
+                        FileHandle.standardError.write(Data("MORIQ internal fake caption recovery failed: connections=\(connections) staleRejected=\(staleRejected) statusReady=\(statusReady)\n".utf8))
+                        self?.captions.stop(); NSApp.terminate(nil); return
+                    }
+                    print("MORIQ_INTERNAL_FAKE_WINDOW_RECONNECTED"); fflush(stdout)
+                    self.captions.stop()
+                    print("MORIQ_INTERNAL_FAKE_CAPTIONS_STOPPED"); fflush(stdout)
+                    NSApp.terminate(nil)
+                }
+                return
+            }
+            #endif
+            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                MainActor.assumeIsolated { NSApp.terminate(nil) }
+            }
+        }
+        #endif
     }
     #if DEBUG
     private func verifyInteractiveCapture() {
@@ -809,6 +946,9 @@ struct MORIQApp: App {
     }
     #endif
     private func startEnabledFeatures() {
+        guard runtimeEnvironment.permits(.automaticFeatures, recordRefusal: { message in
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+        }) else { flow.notice = "内部测试已禁用系统功能。"; return }
         let captionsStatus = GlobalShortcutRegistry.shared.enable(.captions, retryOnUpdate: true) { [weak self] in self?.toggleLiveCaptions() }
         if captionsStatus != noErr { flow.notice = "实时字幕的快捷键注册失败（\(captionsStatus)），请检查冲突。" }
         for feature in [Feature.converter, .assistant, .shelf, .clipboard, .screenshot, .notes] where settings.enabled[feature.rawValue] == true {
@@ -842,7 +982,14 @@ struct MORIQApp: App {
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 650), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "MORIQ"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 650, height: 560)
-            window.contentView = NSHostingView(rootView: MainFlowView(flow: flow, store: settings, newNote: { [weak self] in self?.newStickyNote() })); window.center(); mainWindow = window
+            let root = MainFlowView(flow: flow, store: settings, newNote: { [weak self] in self?.newStickyNote() })
+            if runtimeEnvironment.mode == .internalIsolated {
+                guard let defaults = runtimeEnvironment.defaults() else {
+                    FileHandle.standardError.write(Data("MORIQ runtime refused unavailable UI defaults\n".utf8)); return
+                }
+                window.contentView = NSHostingView(rootView: root.defaultAppStorage(defaults))
+            } else { window.contentView = NSHostingView(rootView: root) }
+            window.center(); mainWindow = window
         }
         NSApp.activate(ignoringOtherApps: true); mainWindow?.makeKeyAndOrderFront(nil)
     }
@@ -866,8 +1013,17 @@ struct MORIQApp: App {
     @objc func toggleLiveCaptions() { settings.binding(for: .captions).wrappedValue.toggle() }
     @objc func quit() { PermissionRelaunch.shared.cancel(); NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        #if MORIQ_INTERNAL_SMOKE
+        if runtimeEnvironment.mode == .internalIsolated { print("MORIQ_INTERNAL_TERMINATE_REQUESTED"); fflush(stdout) }
+        #endif
         guard stickyNotes.store.flush() else { flow.notice = stickyNotes.store.error; openMain(); return .terminateCancel }
+        // Internal mode cannot start clipboard monitoring and its store is
+        // nonpersistent. Do not instantiate a pasteboard just to quit.
+        if runtimeEnvironment.mode == .internalIsolated { return .terminateNow }
         clipboard.prepareShutdown { success in
+            #if MORIQ_INTERNAL_SMOKE
+            if self.runtimeEnvironment.mode == .internalIsolated { print("MORIQ_INTERNAL_CLIPBOARD_SHUTDOWN_\(success)"); fflush(stdout) }
+            #endif
             if !success {
                 let alert = NSAlert(); alert.messageText = "剪贴板记录尚未保存"; alert.informativeText = "保存超时或失败，MORIQ 仍在运行。请稍后重试退出。"; alert.addButton(withTitle: "好"); alert.runModal()
             }
@@ -877,6 +1033,30 @@ struct MORIQApp: App {
     }
     func applicationWillTerminate(_ notification: Notification) {
         #if DEBUG
+        if CommandLine.arguments.contains("--verify-diagnostics-conversion") {
+            Task { @MainActor in
+                guard let suiteName=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_SUITE"], let defaults=UserDefaults(suiteName:suiteName), let logPath=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_FILE"] else {exit(2)}
+                defaults.set(true,forKey:LocalDiagnostics.enabledKey)
+                let root=FileManager.default.temporaryDirectory.appendingPathComponent("moriq-conversion-diag-"+UUID().uuidString)
+                do {
+                    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+                    let good=root.appendingPathComponent("good.png"),bad=root.appendingPathComponent("bad.png")
+                    guard let bitmap=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:8,pixelsHigh:8,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0),let data=bitmap.representation(using:.png,properties:[:]) else {exit(3)}
+                    try data.write(to:good);try Data("invalid".utf8).write(to:bad)
+                    let coordinator=ConversionCoordinator(presentsNotices:false,allowSystemDrag:false)
+                    var batches=[[ConversionRecord]]();coordinator.onResults={batches.append($0)}
+                    coordinator.enqueueConversion([good],to:.jpeg);coordinator.enqueueConversion([bad],to:.jpeg)
+                    for _ in 0..<200 {if batches.count==2 {break};try await Task.sleep(for:.milliseconds(25))}
+                    guard batches.count==2,batches[0][0].output != nil,batches[1][0].output == nil else {exit(4)}
+                    LocalDiagnostics.shared.flushForTesting()
+                    let events=try Data(contentsOf:URL(fileURLWithPath:logPath)).split(separator:10).map {try JSONDecoder().decode(DiagnosticEvent.self,from:Data($0))}
+                    guard events.contains(where:{$0.feature == .conversion && $0.outcome == .success && $0.inputFormat == .image && $0.outputFormat == .image && $0.countBucket == .one}),events.contains(where:{$0.feature == .conversion && $0.outcome == .failure && $0.inputFormat == .image && $0.error != nil}) else {exit(5)}
+                    try? FileManager.default.removeItem(at:root);try? FileManager.default.removeItem(atPath:logPath);defaults.removePersistentDomain(forName:suiteName)
+                    print("PASS actual conversion success/failure categorized without file data");fflush(stdout);exit(0)
+                } catch {let e=error as NSError;print("FAIL conversion fixture",e.domain,e.code);fflush(stdout);exit(1)}
+            }
+            return
+        }
         if CommandLine.arguments.contains("--verify-app-clipboard-quit") {
             guard let vault = QuitFixture.vault, let entries = try? vault.load(), entries.first?.text == "isolated final copy", let bytes = try? Data(contentsOf: vault.file), !bytes.contains(Data("isolated final copy".utf8)) else { exit(9) }
             print("PASS actual menu quit preserved encrypted isolated final copy"); fflush(stdout)
@@ -884,7 +1064,16 @@ struct MORIQApp: App {
             return
         }
         #endif
-        stickyNotes.shutdown(); assistant.disable(); clipboard.shutdown(); screenshot.disable(); inlineScreenshot.close(); converter.cancel(); shelf.disable(); if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+        stickyNotes.shutdown(); assistant.disable()
+        if runtimeEnvironment.mode == .product { clipboard.shutdown() }
+        screenshot.disable(); inlineScreenshot.close(); converter.cancel(); shelf.disable(); if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+        syntheticClipboardBoard?.releaseGlobally(); syntheticClipboardBoard = nil
+        runtimeEnvironment.discardSyntheticDefaults()
+        #if MORIQ_INTERNAL_SMOKE
+        if runtimeEnvironment.mode == .internalIsolated && CommandLine.arguments.contains("--moriq-internal-smoke") {
+            print("MORIQ_INTERNAL_SMOKE_CLEAN_EXIT"); fflush(stdout)
+        }
+        #endif
     }
 }
 

@@ -1,65 +1,29 @@
-![MORIQ：让想法往前走](assets/moriq-cover.png)
-
-<div align="center">
-
 # MORIQ
 
-**让想法往前走，让琐事留在身后。**
+MORIQ 是原生 macOS 项目。当前是 M0/M1 工作原型及 M2/M3 的部分代码，不是可发布版本。保留了历史 ScreenBuddy 规格，原来的底部浅色玻璃 AI 胶囊是 MORIQ 的一个功能；旧品牌不出现在应用界面。
 
-一组住在 Mac 里的小工具。<br />
-在你需要的那一刻出现，做完，就安静退场。
+## 打开与构建
 
-`macOS` &nbsp;·&nbsp; `桌面工具` &nbsp;·&nbsp; `开发中`
+本机使用 `~/Applications/MORIQ.app` 启动。开发基线 macOS 15+。可打开 `MORIQ.xcodeproj` 构建；也可以在独立目录构建，避免覆盖正在运行的应用：
 
-<br />
+```sh
+xcodebuild -project MORIQ.xcodeproj -scheme MORIQ -configuration Debug -derivedDataPath /tmp/moriq-build build
+codesign --verify --deep --strict /tmp/moriq-build/Build/Products/Debug/MORIQ.app
+```
 
-[认识 MORIQ](#认识-moriq) &nbsp; / &nbsp; [安装与使用](#安装与使用) &nbsp; / &nbsp; [当前进度](#当前进度)
+本机 Debug 构建使用开发者签名，未公证、未准备分发，部分转换引擎依赖本机开发文件。更新应用前先退出旧实例，并验证新构建；不要直接覆盖正在运行的应用。退出入口位于菜单栏图标。
 
-</div>
+## 当前状态
 
----
+转换圆盘、文件暂存架、加密剪贴板、超级截图及 AI 屏幕助手均已接入。圆盘支持部分图片、Office、PDF、音频、视频与 ZIP/TAR/TAR.GZ 归档格式；Office 转换需要本机 LibreOffice，具体覆盖和未完成项目见下文状态文件。截图支持标注、复制、OCR 和本地翻译；屏幕助手提问时将采样画面及识别文字发送给 AI 服务。介绍页面中的操作是演示，不代表跨应用验收已完成。详细已测内容与剩余限制见 `KNOWN_GAPS.md`；参考开源项目及对照标准见 `docs/GITHUB_BENCHMARK.md`。
 
-## 认识 MORIQ
+测试转换引擎：
 
-有些打断很小：换个文件格式、找回刚才复制的文字、截取屏幕里的一句话。小到不值得打开一个新应用，却足够让思路停下来。
+```sh
+swiftc MORIQ/ImageConverter.swift Tests/main.swift -o /tmp/moriq-converter-tests
+/tmp/moriq-converter-tests
+swiftc MORIQ/ImageConverter.swift Tests/ConversionMatrix/main.swift -o /tmp/moriq-matrix-test
+/tmp/moriq-matrix-test
+```
 
-MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或者从屏幕边缘取回需要的东西，让你更从容地继续眼前的事。
-
-### 文件，不必绕路
-
-**转换圆盘** · 拖动文件，选一个目标格式，开始转换。  
-**文件暂存架** · 把待用的文件暂放在屏幕边缘，需要时再取出。  
-**剪贴板** · 找回复制记录，把常用内容收藏起来，一点即可复制。
-
-### 看见的，随手处理
-
-**超级截图** · 框选、识别、翻译与标注，让截图从画面变成可以继续使用的信息。  
-**屏幕便签** · 把念头写下来，留在桌面上。  
-**实时字幕** · 为电脑声音生成字幕，支持原文与译文显示。识别和翻译效果会受到语言资源、设备性能和音频环境影响。
-
-### 需要思考时，有个助手
-
-**AI 助手** · 唤出助手，围绕当前屏幕继续提问。在线 AI 依赖可用服务；产品统一服务尚未上线，不能承诺安装后即可使用。
-
-## 安装与使用
-
-MORIQ 面向 **macOS 15 或更高版本**。正式安装包正在准备中，下载链接将在发行验收完成后提供。
-
-首次使用时，应用会引导你了解所需权限。截图、系统音频字幕和部分桌面交互分别需要相应的 macOS 权限；具体说明会在应用内提供。
-
-快捷键可在应用设置中调整，浅色与深色外观也可按喜好切换。
-
-## 当前进度
-
-MORIQ 仍在开发和验收中。本机版本已有上述工具的实现；公开安装包、不同 Mac 的兼容性和正式在线服务仍需完成验证。
-
-在线流式语音翻译正在接入，当前不能视为已上线的能力。待安装包和服务准备妥当后，这里会补上真实的下载入口和使用说明。
-
----
-
-<div align="center">
-
-**MORIQ**<br />
-让常用的桌面操作更顺手。
-
-</div>
+测试会在系统临时目录创建并清理测试图片。详见 `KNOWN_GAPS.md`。编译日志为 `docs/build-debug.log`。交接包在 `Handoff/`，旧版规格在 `docs/ScreenBuddy_Legacy/`。

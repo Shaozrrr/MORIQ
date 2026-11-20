@@ -2,9 +2,33 @@ import Foundation
 import Security
 import SwiftUI
 
+/// A second fail-closed guard at the Keychain boundary. The internal package
+/// must never read, write, or delete a product account credential.
+struct RuntimeCredentialPolicy {
+    let allowsRealCredentials: Bool
+    static var current: Self {
+        let bundleID = Bundle.main.bundleIdentifier ?? ""
+        let flavor = Bundle.main.object(forInfoDictionaryKey: "MORIQBuildFlavor")
+        return .init(allowsRealCredentials: !bundleID.hasPrefix("local.moriq.internal") && flavor == nil)
+    }
+    func requireAccess() throws {
+        guard allowsRealCredentials else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused real credentials\n".utf8))
+            throw DeepSeekKeychain.KeyError.keychain(errSecInteractionNotAllowed)
+        }
+    }
+    func requireNetwork() throws {
+        guard allowsRealCredentials else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused external AI network\n".utf8))
+            throw DeepSeekKeychain.KeyError.keychain(errSecInteractionNotAllowed)
+        }
+    }
+}
 struct DeepSeekKeychain {
+    var policy: RuntimeCredentialPolicy = .current
     private let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.moriq.deepseek", kSecAttrAccount as String: "api-key"]
     func load() throws -> String? {
+        try policy.requireAccess()
         var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
@@ -12,6 +36,7 @@ struct DeepSeekKeychain {
         return text
     }
     func save(_ key: String) throws {
+        try policy.requireAccess()
         let cleaned = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, let bytes = cleaned.data(using: .utf8) else { throw KeyError.empty }
         let changes = [kSecValueData as String: bytes] as CFDictionary
@@ -22,6 +47,7 @@ struct DeepSeekKeychain {
         } else if status != errSecSuccess { throw KeyError.keychain(status) }
     }
     func delete() throws {
+        try policy.requireAccess()
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeyError.keychain(status) }
     }
@@ -121,6 +147,7 @@ enum DeepSeekError: LocalizedError {
         case .noKey: return "请先在菜单栏的 AI 连接中配置服务密钥。"
         case .http(401): return "密钥无效或已过期，请检查 AI 连接设置。"
         case .http(402): return "AI 服务账户余额不足，请检查账户余额。"
+        case .http(409): return "这次请求已提交，但结果可能未完整返回。请发送新问题后继续。"
         case .http(429): return "请求过于频繁，请稍后重试。"
         case .http(let code): return "AI 服务请求失败（HTTP \(code)），请稍后重试。"
         case .invalidResponse: return "无法识别服务返回的响应。"
@@ -151,20 +178,29 @@ enum AIErrorMessage {
     }
 }
 struct DeepSeekProvider {
+    var networkPolicy: RuntimeCredentialPolicy = .current
     var session: URLSession = .shared
     var endpoint = URL(string: "https://api.deepseek.com/chat/completions")!
     var keyLoader: () throws -> String? = { try DeepSeekKeychain().load() }
+    var managedLease: (() async throws -> (String, @Sendable () async -> Void))? = nil
     var unauthorizedError: (() -> Error)? = nil
     var maxMessages: Int? = nil
     var maxTextBytes: Int? = nil
     var maxImagesPerMessage: Int? = nil
     var maxImageCount: Int? = nil
+    var sendsOperationID = false
     func stream(messages: [ChatMessage], onDelta: @escaping @MainActor (String) -> Void) async throws {
+        try networkPolicy.requireNetwork()
         if let maxMessages, messages.isEmpty || messages.count > maxMessages { throw DeepSeekError.requestTooLarge }
-        guard let key = try keyLoader(), !key.isEmpty else { throw DeepSeekError.noKey }
+        let lease = try await managedLease?()
+        defer { if let release = lease?.1 { Task { await release() } } }
+        guard let key = try (lease?.0 ?? keyLoader()), !key.isEmpty else { throw DeepSeekError.noKey }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        if sendsOperationID, let operation = messages.last(where: { $0.role == "user" })?.id {
+            request.setValue(operation.uuidString.replacingOccurrences(of: "-", with: "").lowercased(), forHTTPHeaderField: "MORIQ-Operation-ID")
+        }
         request.timeoutInterval = 90
         // Retain dialogue text but bound retransmission of earlier screen images.
         let imageTurns = messages.indices.filter { !messages[$0].images.isEmpty }
@@ -269,16 +305,26 @@ struct DeepSeekProvider {
     func reset() { requestID = UUID(); task?.cancel(); task = nil; messages.removeAll(); input = ""; error = nil; clearScreen(); working = false; onExpand?(false) }
     private func startRequest(_ requestMessages: [ChatMessage]) {
         let id = UUID(); requestID = id
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.assistant, .start, .started, operationID: id)
         messages.append(ChatMessage(role: "assistant", content: ""))
         working = true; onExpand?(true)
         task = Task { [self] in
+            var diagnosticOutcome: DiagnosticOutcome = .success
+            var firstOutputRecorded = false
             do {
                 try await provider.stream(messages: requestMessages) { [weak self] delta in
                     guard let self, self.requestID == id, !self.messages.isEmpty else { return }
+                    if !firstOutputRecorded && !delta.isEmpty { firstOutputRecorded = true; LocalDiagnostics.shared.record(.assistant, .firstOutput, .success, duration: ProcessInfo.processInfo.systemUptime-diagnosticStart, operationID:id) }
                     self.messages[self.messages.count - 1].content += delta
                 }
-            } catch is CancellationError { if self.requestID == id { self.error = "已停止生成。" } }
-            catch { if self.requestID == id { self.error = AIErrorMessage.describe(error) } }
+            } catch is CancellationError { diagnosticOutcome = .cancelled; if self.requestID == id { self.error = "已停止生成。" } }
+            catch {
+                let cancelled = Task.isCancelled || (error as? URLError)?.code == .cancelled
+                diagnosticOutcome = cancelled ? .cancelled : .failure
+                if self.requestID == id { self.error = cancelled ? "已停止生成。" : AIErrorMessage.describe(error) }
+            }
+            LocalDiagnostics.shared.record(.assistant, .complete, diagnosticOutcome, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: id)
             guard self.requestID == id else { return }
             if self.error != nil, self.messages.last?.role == "assistant", self.messages.last?.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { self.messages.removeLast() }
             self.working = false; self.task = nil

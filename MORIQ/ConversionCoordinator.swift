@@ -129,6 +129,7 @@ struct ConversionRecord: Identifiable {
     let source: URL
     let output: URL?
     let message: String
+    var diagnosticError: DiagnosticError? = nil
     static func completionNotice(_ records: [ConversionRecord], requestedCount: Int, archive: Bool) -> String {
         if records.count == 1, let record = records.first { return record.message }
         let succeeded = records.filter { $0.output != nil }.count
@@ -152,6 +153,7 @@ struct ConversionRecord: Identifiable {
     private var inspectionTask: Task<Void, Never>?
     private var inspectionID = UUID()
     private let presentsNotices: Bool
+    private let allowSystemDrag: Bool
     private var queue: [([URL], UTType)] = []
     var onResults: (([ConversionRecord]) -> Void)?
     private var presentationID = UUID()
@@ -165,11 +167,18 @@ struct ConversionRecord: Identifiable {
     private var screenshotSelectionWasDown = false
     private var modifierBeganAt: TimeInterval?
     private var systemCaptureWasActive = false
-    private var idleDragChangeCount = NSPasteboard(name: .drag).changeCount
+    private var idleDragChangeCount: Int
     private let formats: [WheelFormat] = [WheelFormat(type: .png, label: "PNG"), WheelFormat(type: .jpeg, label: "JPG"), WheelFormat(type: .tiff, label: "TIFF"), WheelFormat(type: .heic, label: "HEIC"), WheelFormat(type: .pdf, label: "PDF"), WheelFormat(type: .gif, label: "GIF"), WheelFormat(type: UTType("com.microsoft.bmp")!, label: "BMP"), WheelFormat(type: UTType("public.avif")!, label: "AVIF"), WheelFormat(type: UTType("public.jpeg-2000")!, label: "JP2"), WheelFormat(type: UTType("org.webmproject.webp")!, label: "WEBP")]
 
-    init(presentsNotices: Bool = true) { self.presentsNotices = presentsNotices }
+    init(presentsNotices: Bool = true, allowSystemDrag: Bool = true) {
+        self.presentsNotices = presentsNotices
+        self.allowSystemDrag = allowSystemDrag
+        idleDragChangeCount = allowSystemDrag ? NSPasteboard(name: .drag).changeCount : 0
+    }
     func enable() {
+        guard allowSystemDrag else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused system drag monitoring\n".utf8)); return
+        }
         guard dragMonitor == nil else { return }
         let monitor = DragActivityMonitor(tick: { [weak self] in self?.poll() }, onMouseDown: { [weak self] in
             self?.idleDragChangeCount = NSPasteboard(name: .drag).changeCount
@@ -472,6 +481,12 @@ struct ConversionRecord: Identifiable {
         worker = Task { @MainActor in
             while !queue.isEmpty && !Task.isCancelled {
                 let (files, format) = queue.removeFirst()
+                let diagnosticID = UUID(), diagnosticStart = ProcessInfo.processInfo.systemUptime
+                let inputKinds = Set(files.map { DiagnosticFormat.fromExtension($0.pathExtension) })
+                let diagnosticInput: DiagnosticFormat = inputKinds.isEmpty ? .other : inputKinds.count == 1 ? (inputKinds.first ?? .other) : .mixed
+                let diagnosticOutput = DiagnosticFormat.fromExtension(format.preferredFilenameExtension ?? "")
+                let diagnosticCount = DiagnosticCountBucket.from(files.count)
+                LocalDiagnostics.shared.record(.conversion, .start, .started, operationID: diagnosticID, inputFormat: diagnosticInput, outputFormat: diagnosticOutput, stage: .convert, countBucket: diagnosticCount)
                 var records: [ConversionRecord] = []
                 if files.count > 1, ArchiveConverter.isArchiveTarget(format), let first = files.first {
                     let child = Task.detached(priority: .userInitiated) { () -> ConversionRecord in
@@ -479,11 +494,11 @@ struct ConversionRecord: Identifiable {
                             let output = try ArchiveConverter().batch(inputs: files, outputDirectory: first.deletingLastPathComponent(), format: format)
                             return ConversionRecord(source: first, output: output, message: "已将 \(files.count) 项打包")
                         } catch ArchiveConversionError.duplicateNames {
-                            return ConversionRecord(source: first, output: nil, message: "所选项目有同名文件，请先改名后打包")
+                            return ConversionRecord(source: first, output: nil, message: "所选项目有同名文件，请先改名后打包", diagnosticError: .conflict)
                         } catch ArchiveConversionError.filesystem(let code) {
-                            return ConversionRecord(source: first, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: first, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch {
-                            return ConversionRecord(source: first, output: nil, message: "打包失败，请检查文件和磁盘空间")
+                            return ConversionRecord(source: first, output: nil, message: "打包失败，请检查文件和磁盘空间", diagnosticError: .unknown)
                         }
                     }
                     let record = await withTaskCancellationHandler { await child.value } onCancel: { child.cancel() }
@@ -534,57 +549,63 @@ struct ConversionRecord: Identifiable {
                             let message = videoToGIF ? "已转换首条画面轨；不包含音频和字幕，颜色已量化" : (DocumentConverter.pdfResultNotice(input: file, targetExtension: targetExtension) ?? animationNotice ?? imageNotice ?? (videoSidecars ? "已将主视频与独立轨道保存到文件夹" : (isSheet && sheetText ? (folder ? "已导出所有工作表；不保留公式和样式" : "已导出计算结果；不保留公式和样式") : (isSheet && ["ods", "xlsx"].contains(targetExtension) ? "已转换；请检查列宽和冻结窗格" : (folder && (ExternalMediaConverter.audioInputs.contains(existingExtension) || videoToAudio) ? "已将音频及附加数据保存到文件夹" : (videoToAudio ? "已提取音频" : (folder ? "已导出到文件夹" : "已完成")))))))
                             return ConversionRecord(source: file, output: output, message: message)
                         } catch ArchiveConversionError.filesystem(let code) {
-                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch is ArchiveConversionError {
-                            return ConversionRecord(source: file, output: nil, message: "压缩失败，请检查文件和磁盘空间")
+                            return ConversionRecord(source: file, output: nil, message: "压缩失败，请检查文件和磁盘空间", diagnosticError: .unknown)
                         } catch ExternalMediaError.filesystem(let code) {
-                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch ExternalMediaError.timingUnsupported {
-                            return ConversionRecord(source: file, output: nil, message: "该动画的帧时长过于特殊，暂无法准确转换为视频")
+                            return ConversionRecord(source: file, output: nil, message: "该动画的帧时长过于特殊，暂无法准确转换为视频", diagnosticError: .unsupported)
                         } catch ExternalMediaError.unsupportedTracks {
-                            return ConversionRecord(source: file, output: nil, message: "文件含暂无法保留的附件或数据轨道，未进行转换")
+                            return ConversionRecord(source: file, output: nil, message: "文件含暂无法保留的附件或数据轨道，未进行转换", diagnosticError: .unsupported)
                         } catch ExternalMediaError.failed {
-                            return ConversionRecord(source: file, output: nil, message: "音视频转换失败，请检查文件、编码和磁盘空间")
+                            return ConversionRecord(source: file, output: nil, message: "音视频转换失败，请检查文件、编码和磁盘空间", diagnosticError: .unknown)
                         } catch VideoConversionError.filesystem(let code) {
-                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch VideoConversionError.failed {
-                            return ConversionRecord(source: file, output: nil, message: "视频无法转换，请检查文件及编码")
+                            return ConversionRecord(source: file, output: nil, message: "视频无法转换，请检查文件及编码", diagnosticError: .unknown)
                         } catch AudioConversionError.filesystem(let code) {
-                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch AudioConversionError.precisionUnsupported {
-                            return ConversionRecord(source: file, output: nil, message: "当前编码方式无法无损保留音频精度，请选择 WAV 或 CAF")
+                            return ConversionRecord(source: file, output: nil, message: "当前编码方式无法无损保留音频精度，请选择 WAV 或 CAF", diagnosticError: .unsupported)
                         } catch AudioConversionError.invalidOutput {
-                            return ConversionRecord(source: file, output: nil, message: "音频输出无法读取")
+                            return ConversionRecord(source: file, output: nil, message: "音频输出无法读取", diagnosticError: .invalidOutput)
                         } catch AudioConversionError.failed {
-                            return ConversionRecord(source: file, output: nil, message: "音频无法转换，请检查文件及编码")
+                            return ConversionRecord(source: file, output: nil, message: "音频无法转换，请检查文件及编码", diagnosticError: .unknown)
                         } catch DocumentConversionError.noText {
-                            return ConversionRecord(source: file, output: nil, message: "PDF 页面未识别出文字，无法完成该格式转换")
+                            return ConversionRecord(source: file, output: nil, message: "PDF 页面未识别出文字，无法完成该格式转换", diagnosticError: .invalidInput)
                         } catch DocumentConversionError.invalidInput {
-                            return ConversionRecord(source: file, output: nil, message: "文件格式不符或文件已损坏，请检查原文件")
+                            return ConversionRecord(source: file, output: nil, message: "文件格式不符或文件已损坏，请检查原文件", diagnosticError: .invalidInput)
                         } catch DocumentConversionError.resourceUnavailable {
-                            return ConversionRecord(source: file, output: nil, message: "文档引用的图片或资源无法读取，未生成缺失内容的文件")
+                            return ConversionRecord(source: file, output: nil, message: "文档引用的图片或资源无法读取，未生成缺失内容的文件", diagnosticError: .unavailable)
                         } catch DocumentConversionError.engineMissing {
-                            return ConversionRecord(source: file, output: nil, message: "未找到 LibreOffice 文档转换引擎")
+                            return ConversionRecord(source: file, output: nil, message: "未找到 LibreOffice 文档转换引擎", diagnosticError: .engine)
                         } catch DocumentConversionError.packagedEngineMissing {
-                            return ConversionRecord(source: file, output: nil, message: "转换组件缺失，请重新安装 MORIQ")
+                            return ConversionRecord(source: file, output: nil, message: "转换组件缺失，请重新安装 MORIQ", diagnosticError: .engine)
                         } catch DocumentConversionError.filesystem(let code) {
-                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: code == ENOSPC ? "磁盘空间不足" : "无法写入目标文件夹", diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch ImageConversionError.filesystem(let code) {
                             let message = code == ENOSPC ? "磁盘空间不足" : (code == EACCES || code == EPERM ? "没有写入目标文件夹的权限" : "无法写入目标文件夹")
-                            return ConversionRecord(source: file, output: nil, message: message)
+                            return ConversionRecord(source: file, output: nil, message: message, diagnosticError: code == ENOSPC ? .diskFull : (code == EACCES || code == EPERM ? .permissionDenied : .storage))
                         } catch ImageConversionError.invalidInput {
-                            return ConversionRecord(source: file, output: nil, message: "图片已损坏、不可读取或包含多帧")
+                            return ConversionRecord(source: file, output: nil, message: "图片已损坏、不可读取或包含多帧", diagnosticError: .invalidInput)
                         } catch ImageConversionError.unsupportedOutput {
-                            return ConversionRecord(source: file, output: nil, message: "当前系统不支持这种输出格式")
+                            return ConversionRecord(source: file, output: nil, message: "当前系统不支持这种输出格式", diagnosticError: .unsupported)
                         } catch {
-                            return ConversionRecord(source: file, output: nil, message: "转换未完成，请检查文件和目标文件夹")
+                            return ConversionRecord(source: file, output: nil, message: "转换未完成，请检查文件和目标文件夹", diagnosticError: .unknown)
                         }
                     }
                     let record = await withTaskCancellationHandler { await child.value } onCancel: { child.cancel() }
                     records.append(record)
                 }
                 }
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled else {
+                    LocalDiagnostics.shared.record(.conversion, .complete, .cancelled, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: diagnosticID, inputFormat: diagnosticInput, outputFormat: diagnosticOutput, stage: .convert, countBucket: diagnosticCount); break
+                }
+                let diagnosticSuccess = records.allSatisfy { $0.output != nil } && !records.isEmpty
+                let errors = Set(records.filter { $0.output == nil }.map { $0.diagnosticError ?? .unknown })
+                let diagnosticError: DiagnosticError? = diagnosticSuccess ? nil : errors.count == 1 ? errors.first : errors.isEmpty ? .unknown : .mixed
+                LocalDiagnostics.shared.record(.conversion, .complete, diagnosticSuccess ? .success : .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: diagnosticID, inputFormat: diagnosticInput, outputFormat: diagnosticOutput, stage: .convert, error: diagnosticError, countBucket: diagnosticCount)
                 onResults?(records)
                 let summary = ConversionRecord.completionNotice(records, requestedCount: files.count, archive: ArchiveConverter.isArchiveTarget(format))
                 showNotice(summary)

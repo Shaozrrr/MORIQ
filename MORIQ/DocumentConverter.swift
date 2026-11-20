@@ -65,6 +65,10 @@ struct DocumentConverter {
     /// different prefix. Point it at macOS's installed fonts so exported
     /// CJK text remains visible on a clean Mac; no fonts are redistributed.
     private func configureOfficeFonts(_ process: Process, scratch: URL) throws {
+        guard !(Bundle.main.bundleIdentifier ?? "").hasPrefix("local.moriq.internal"), Bundle.main.object(forInfoDictionaryKey: "MORIQBuildFlavor") == nil else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused product conversion cache\n".utf8))
+            throw DocumentConversionError.resourceUnavailable
+        }
         let cacheRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
         let cache = cacheRoot.appendingPathComponent("MORIQ/OfficeFonts", isDirectory:true)
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories:true)

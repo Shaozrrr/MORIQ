@@ -75,21 +75,26 @@ import UniformTypeIdentifiers
     }
     func copy(to target: NSPasteboard? = nil) {
         cancelExport(); let id = UUID(); exportID = id
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.screenshot,.copy,.started,operationID:id)
         let snapshot = annotations, cached = previewAnnotations == annotations ? preview : nil
         let board = target ?? pasteboard
         let initialChange = board.changeCount
         status = "正在复制…"
         exportTask = Task { @MainActor in
+            var outcome: DiagnosticOutcome = .cancelled
+            defer { LocalDiagnostics.shared.record(.screenshot,.copy,outcome,duration:ProcessInfo.processInfo.systemUptime-diagnosticStart,operationID:id) }
             guard !Task.isCancelled, exportID == id else { return }
             let image = await renderForOperation(snapshot, cached: cached)
             guard !Task.isCancelled, exportID == id else { return }
-            guard let image else { status = "图片处理失败"; exportTask = nil; return }
+            guard let image else { outcome = .failure; status = "图片处理失败"; exportTask = nil; return }
             let formats = await Task.detached(priority: .userInitiated) { Self.clipboardFormats(image) }.value
             guard !Task.isCancelled, exportID == id else { return }
-            guard let formats else { status = "图片处理失败"; exportTask = nil; return }
-            guard board.changeCount == initialChange else { status = "剪贴板已更改，请重新复制"; exportTask = nil; return }
+            guard let formats else { outcome = .failure; status = "图片处理失败"; exportTask = nil; return }
+            guard board.changeCount == initialChange else { outcome = .failure; status = "剪贴板已更改，请重新复制"; exportTask = nil; return }
             board.clearContents(); board.declareTypes([.png, .tiff], owner: nil)
             let success = board.setData(formats.0, forType: .png) && board.setData(formats.1, forType: .tiff)
+            outcome = success ? .success : .failure
             status = success ? "已复制图片" : "复制失败，请重试"
             exportTask = nil
             if success { InteractionFeedback.confirmation() }
@@ -104,15 +109,20 @@ import UniformTypeIdentifiers
     func recognize() {
         cancelExport()
         cancelOperation(); let id = UUID(); operationID = id
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.screenshot,.recognize,.started,operationID:id)
         let snapshot = annotations, cached = previewAnnotations == annotations ? preview : nil
         details = .recognition; result = ""; status = "正在识别文字…"; busy = true; remoteDisclosure = false
         operation = Task { @MainActor in
+            var outcome: DiagnosticOutcome = .cancelled
+            defer { LocalDiagnostics.shared.record(.screenshot,.recognize,outcome,duration:ProcessInfo.processInfo.systemUptime-diagnosticStart,operationID:id) }
             guard !Task.isCancelled, operationID == id else { return }
             let edited = await renderForOperation(snapshot, cached: cached)
             guard !Task.isCancelled, operationID == id else { return }
-            guard let edited else { status = "图片处理失败"; busy = false; operation = nil; return }
+            guard let edited else { outcome = .failure; status = "图片处理失败"; busy = false; operation = nil; return }
             let value = await Task.detached(priority: .userInitiated) { try? OCREngine().recognize(edited) }.value
             guard !Task.isCancelled, operationID == id else { return }
+            outcome = value == nil || value!.isEmpty ? .failure : .success
             result = value ?? ""; status = result.isEmpty ? "未识别到文字" : "识别完成"; busy = false; operation = nil
         }
     }
@@ -144,14 +154,17 @@ import UniformTypeIdentifiers
     }
     func translate(using translator: TranslationSession) async {
         guard details == .translation, busy, !result.isEmpty, !remoteDisclosure else { return }
-        let id = operationID, source = result
+        let id = operationID, source = result, diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.screenshot,.translate,.started,operationID:id)
+        var outcome: DiagnosticOutcome = .cancelled
+        defer { LocalDiagnostics.shared.record(.screenshot,.translate,outcome,duration:ProcessInfo.processInfo.systemUptime-diagnosticStart,operationID:id) }
         do {
             let response = try await translator.translate(source)
             guard operationID == id else { return }
-            result = response.targetText; status = "本机翻译完成"
+            outcome = .success; result = response.targetText; status = "本机翻译完成"
         } catch {
             guard operationID == id else { return }
-            status = "翻译未完成，请检查系统语言包"
+            outcome = Task.isCancelled ? .cancelled : .failure; status = "翻译未完成，请检查系统语言包"
         }
         busy = false
     }
@@ -197,7 +210,9 @@ import UniformTypeIdentifiers
         guard !result.isEmpty else { return }
         cancelExport()
         pasteboard.clearContents()
-        status = pasteboard.setString(result, forType: .string) ? "已复制文字" : "复制失败，请重试"
+        let copied = pasteboard.setString(result, forType: .string)
+        LocalDiagnostics.shared.record(.screenshot,.copy,copied ? .success : .failure)
+        status = copied ? "已复制文字" : "复制失败，请重试"
     }
     func pin() {
         cancelExport(); let id = UUID(); exportID = id

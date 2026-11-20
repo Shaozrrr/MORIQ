@@ -25,6 +25,9 @@ import Darwin
     private var testCapture: (() async throws -> CGImage)?
     #endif
     func enable() -> OSStatus {
+        guard !(Bundle.main.bundleIdentifier ?? "").hasPrefix("local.moriq.internal"), Bundle.main.object(forInfoDictionaryKey: "MORIQBuildFlavor") == nil else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused screenshot capture\n".utf8)); return -50
+        }
         guard !GlobalShortcutRegistry.shared.isEnabled(.screenshot) else { return noErr }
         let result = GlobalShortcutRegistry.shared.enable(.screenshot) { [weak self] in self?.triggerSelection() }
         guard result == noErr else { return result }
@@ -152,13 +155,15 @@ import Darwin
     }
     private func capture(display: CGDirectDisplayID, rect: CGRect, screenFrame: CGRect, visibleFrame: CGRect) {
         dismissOverlays()
-        guard rect.width >= 4, rect.height >= 4 else { onSelectionCancelled?(); return }
+        guard rect.width >= 4, rect.height >= 4 else { LocalDiagnostics.shared.record(.screenshot, .select, .cancelled); onSelectionCancelled?(); return }
         InteractionFeedback.confirmation()
         invalidateCapture()
         // Selection overlays disappear before the display image is captured.
         // Keep other drag UI suppressed until that capture has completed.
         InteractionArbiter.selectingScreenshot = true
         let generation = captureGeneration
+        let diagnosticID = UUID(), diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.screenshot, .start, .started, operationID: diagnosticID)
         captureTask = Task { @MainActor in
             do {
                 // Wait until overlays leave the composited screen before taking the image.
@@ -171,9 +176,11 @@ import Darwin
                 guard captureGeneration == generation else { return }
                 let globalSelection = rect.offsetBy(dx: screenFrame.minX, dy: screenFrame.minY)
                 captureTask = nil; InteractionArbiter.selectingScreenshot = false
+                LocalDiagnostics.shared.record(.screenshot, .complete, .success, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: diagnosticID)
                 showResult(selected, selection: globalSelection, screen: screenFrame, visible: visibleFrame)
-            } catch is CancellationError { return } catch {
+            } catch is CancellationError { LocalDiagnostics.shared.record(.screenshot, .complete, .cancelled, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: diagnosticID); return } catch {
                 guard !Task.isCancelled, captureGeneration == generation else { return }
+                LocalDiagnostics.shared.record(.screenshot, .complete, .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: diagnosticID)
                 captureTask = nil; InteractionArbiter.selectingScreenshot = false; onSelectionCancelled?(); onError?("截图失败：无法获取所选屏幕，请检查权限或重新选择。")
             }
         }

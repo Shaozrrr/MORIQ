@@ -97,4 +97,132 @@ class ReleaseTests(unittest.TestCase):
     with self.assertRaises(m.ReleaseError): m.sign('/not-used',str(out),IDENTITY,'1;bad','1')
    self.assertFalse(out.exists())
 
+ def test_explicit_speech_configuration_and_invalid_endpoints(self):
+  good='wss://captions.moriq.examplehost.com/v1/speech/stream'
+  self.assertEqual(m.validate_speech_endpoint(good),good)
+  for bad in ['ws://captions.examplehost.com/v1/speech/stream','wss://127.0.0.1/v1/speech/stream','wss://localhost/v1/speech/stream','wss://device.local/v1/speech/stream','wss://example.com/v1/speech/stream','wss://host.examplehost.com/v1/speech/stream?token=secret','wss://token@host.examplehost.com/v1/speech/stream','wss://host.examplehost.com/v1/speech/stream#x','wss://host.examplehost.com/token']:
+   with self.subTest(bad=bad), self.assertRaises(m.ReleaseError): m.validate_speech_endpoint(bad)
+  with tempfile.TemporaryDirectory(prefix='moriq-release-speech-') as d:
+   out=Path(d)/'build'; calls=[]
+   def fake(args,capture=False):
+    calls.append([str(x) for x in args]); contents=out/'derived/Build/Products/Release/MORIQ.app/Contents'; contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f: plistlib.dump({'CFBundleIdentifier':'local.moriq.app'},f)
+    return ''
+   with patch.object(m,'run',fake), patch.object(m,'assert_universal'): m.build(str(out),good)
+   self.assertIn('SWIFT_ACTIVE_COMPILATION_CONDITIONS=MORIQ_NATIVE_TRANSLATION_PRODUCT MORIQ_AUTO_TRANSLATION_PRODUCT',calls[0])
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f: info=plistlib.load(f)
+   self.assertEqual(info['MORIQManagedSpeechEndpoint'],good)
+   self.assertEqual(info['MORIQNativeCaptionMode'],'batch-v1')
+   self.assertEqual(info['MORIQCaptionAutomaticMode'],'trusted-v1')
+   self.assertIs(info['MORIQCaptionPunctAvailable'],False)
+   self.assertEqual(info['CFBundleIdentifier'],'local.moriq.app')
+   self.assertFalse(any('token' in k.lower() for k in info))
+
+ def test_ai_endpoint_is_explicit_and_never_contains_credentials(self):
+  good='https://assistant.moriq.examplehost.com/v1/chat/completions'
+  self.assertEqual(m.validate_ai_endpoint(good),good)
+  for bad in ('http://assistant.examplehost.com/v1/chat/completions','https://127.0.0.1/v1/chat/completions','https://localhost/v1/chat/completions','https://example.com/v1/chat/completions','https://x.examplehost.com/v1/chat/completions?key=secret','https://user@x.examplehost.com/v1/chat/completions','https://x.examplehost.com/other'):
+   with self.subTest(bad=bad), self.assertRaises(m.ReleaseError):m.validate_ai_endpoint(bad)
+  with tempfile.TemporaryDirectory(prefix='moriq-release-ai-') as d:
+   out=Path(d)/'build'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):m.build(str(out),ai_endpoint=good)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertEqual(info['MORIQManagedAIEndpoint'],good)
+   self.assertNotIn('MORIQManagedSpeechEndpoint',info)
+   self.assertFalse(any('token' in k.lower() for k in info))
+
+ def test_full_featured_requires_both_endpoints_before_creating_output(self):
+  with tempfile.TemporaryDirectory(prefix='moriq-release-full-') as d:
+   for i,(speech,ai) in enumerate(((None,None),('wss://captions.moriq.examplehost.com/v1/speech/stream',None),(None,'https://assistant.moriq.examplehost.com/v1/chat/completions'))):
+    out=Path(d)/str(i)
+    with self.assertRaises(m.ReleaseError):m.build(str(out),speech_endpoint=speech,ai_endpoint=ai,full_featured=True)
+    self.assertFalse(out.exists())
+
+ def test_friend_release_rejects_missing_activation_or_shared_leases(self):
+  speech='wss://service.moriq.examplehost.com/v1/speech/stream'
+  ai='https://service.moriq.examplehost.com/v1/chat/completions'
+  activation='https://service.moriq.examplehost.com/v1/devices/renew'
+  with tempfile.TemporaryDirectory(prefix='moriq-release-friend-') as d:
+   for i,(endpoint,leases) in enumerate(((None,False),(None,True),(activation,False))):
+    out=Path(d)/str(i)
+    with self.assertRaises(m.ReleaseError):m.build(str(out),speech_endpoint=speech,ai_endpoint=ai,activation_endpoint=endpoint,shared_leases=leases,full_featured=True)
+    self.assertFalse(out.exists())
+   out=Path(d)/'complete'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):m.build(str(out),speech_endpoint=speech,ai_endpoint=ai,activation_endpoint=activation,shared_leases=True,full_featured=True)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertIs(info['MORIQSharedSessionLeasesEnabled'],True)
+   self.assertEqual(info['MORIQDeviceActivationEndpoint'],activation)
+
+ def test_activation_endpoint_requires_secure_remote_exact_path(self):
+  good='https://service.moriq.examplehost.com/v1/devices/renew'
+  self.assertEqual(m.validate_activation_endpoint(good),good)
+  for bad in ('http://service.moriq.examplehost.com/v1/devices/renew','https://127.0.0.1/v1/devices/renew','https://service.moriq.examplehost.com/v1/devices/renew?token=x','https://service.moriq.examplehost.com/v1/devices/activate'):
+   with self.subTest(bad=bad), self.assertRaises(m.ReleaseError):m.validate_activation_endpoint(bad)
+  with tempfile.TemporaryDirectory(prefix='moriq-release-device-') as d:
+   out=Path(d)/'build'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):m.build(str(out),activation_endpoint=good)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertEqual(info['MORIQDeviceActivationEndpoint'],good)
+   self.assertNotIn('MORIQSharedSessionLeasesEnabled',info)
+
+ def test_shared_leases_require_one_origin_and_all_endpoints(self):
+  speech='wss://service.moriq.examplehost.com/v1/speech/stream'
+  ai='https://service.moriq.examplehost.com/v1/chat/completions'
+  activation='https://service.moriq.examplehost.com/v1/devices/renew'
+  with tempfile.TemporaryDirectory(prefix='moriq-release-shared-') as d:
+   with self.assertRaises(m.ReleaseError):m.build(str(Path(d)/'missing'),speech_endpoint=speech,shared_leases=True)
+   with self.assertRaises(m.ReleaseError):m.build(str(Path(d)/'mismatch'),speech_endpoint=speech,ai_endpoint=ai,activation_endpoint=activation.replace('service.','other.'),shared_leases=True)
+   out=Path(d)/'build'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):m.build(str(out),speech_endpoint=speech,ai_endpoint=ai,activation_endpoint=activation,shared_leases=True)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertIs(info['MORIQSharedSessionLeasesEnabled'],True)
+
+ def test_anonymous_build_requires_shared_service_and_is_opt_in(self):
+  speech='wss://service.moriq.examplehost.com/v1/speech/stream'
+  ai='https://service.moriq.examplehost.com/v1/chat/completions'
+  activation='https://service.moriq.examplehost.com/v1/devices/renew'
+  with tempfile.TemporaryDirectory(prefix='moriq-release-anonymous-') as d:
+   with self.assertRaises(m.ReleaseError):m.build(str(Path(d)/'invalid'),anonymous_device=True)
+   out=Path(d)/'build'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):
+    m.build(str(out),speech_endpoint=speech,ai_endpoint=ai,activation_endpoint=activation,shared_leases=True,anonymous_device=True)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertIs(info['MORIQAnonymousDeviceEnabled'],True)
+
+ def test_punct_build_is_explicit_and_requires_endpoint(self):
+  good='wss://captions.moriq.examplehost.com/v1/speech/stream'
+  with tempfile.TemporaryDirectory(prefix='moriq-release-punct-') as d:
+   out=Path(d)/'missing'
+   with self.assertRaises(m.ReleaseError):m.build(str(out),caption_punct_available=True)
+   self.assertFalse(out.exists())
+   out=Path(d)/'explicit'
+   def fake(args,capture=False):
+    contents=out/'derived/Build/Products/Release/MORIQ.app/Contents';contents.mkdir(parents=True)
+    with (contents/'Info.plist').open('wb') as f:plistlib.dump({},f)
+    return ''
+   with patch.object(m,'run',fake),patch.object(m,'assert_universal'):m.build(str(out),good,True)
+   with (out/'derived/Build/Products/Release/MORIQ.app/Contents/Info.plist').open('rb') as f:info=plistlib.load(f)
+   self.assertIs(info['MORIQCaptionPunctAvailable'],True)
+   self.assertEqual(info['MORIQCaptionAutomaticMode'],'trusted-v1')
+
 if __name__=='__main__': unittest.main()
