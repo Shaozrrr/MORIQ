@@ -43,9 +43,12 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 ## 安装与使用
 
-MORIQ 面向 **macOS 15 或更高版本**，同一安装包支持 Apple 芯片和 Intel 芯片。
+MORIQ 面向 **macOS 15 或更高版本**。
 
-[下载 MORIQ 内测版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-beta2/MORIQ.dmg) · 下载 DMG 后打开，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
+[下载 Apple 芯片精简内测版 · 约 649 MB](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-arm64-beta/MORIQ-arm64.dmg)  
+[下载通用内测版 · 约 1.07 GB](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-beta2/MORIQ.dmg)（支持 Apple 芯片与 Intel 芯片）
+
+精简版已通过 Apple 公证，应用内转换和安装体验尚待完整验收。打开下载的 DMG，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
 
 首次使用时，应用会引导你了解所需权限。截图、系统音频字幕和部分桌面交互分别需要相应的 macOS 权限；具体说明会在应用内提供。
 
