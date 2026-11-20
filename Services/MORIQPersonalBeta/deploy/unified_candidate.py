@@ -81,9 +81,20 @@ async def device_backend(gateway,env):
  from activation_http import IdentityWindowLimit,make_app as make_activation_app
  from device_scopes import ScopedAccountStore
  accounts=gateway.accounts;activation=Activation(accounts)
- gateway.accounts=ScopedAccountStore(accounts,'speech',allow_legacy=legacy=='1')
+ anonymous=env.get('MORIQ_ANONYMOUS_ACTIVATION','0')
+ if anonymous not in ('0','1'):raise ValueError('invalid anonymous setting')
+ if anonymous=='1' and env.get('MORIQ_ANONYMOUS_ACK')!='isolated-evaluation-only':raise ValueError('anonymous evaluation acknowledgement required')
  assistant_accounts=ScopedAccountStore(accounts,'assistant',allow_legacy=legacy=='1')
- runner=web.AppRunner(make_activation_app(activation,IdentityWindowLimit(accounts)),access_log=None,handler_cancellation=True)
+ app=make_activation_app(activation,IdentityWindowLimit(accounts))
+ if anonymous=='1':
+  from anonymous_activation import AnonymousActivation
+  from anonymous_http import register as register_anonymous
+  from activation_http import FairWindowLimit
+  # This isolated option intentionally does not trust forwarded headers.
+  # The deployment's proxy chain must be verified before public exposure.
+  register_anonymous(app,AnonymousActivation(accounts),FairWindowLimit(accounts))
+ gateway.accounts=ScopedAccountStore(accounts,'speech',allow_legacy=legacy=='1')
+ runner=web.AppRunner(app,access_log=None,handler_cancellation=True)
  try:
   await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   yield site._server.sockets[0].getsockname()[1],assistant_accounts
