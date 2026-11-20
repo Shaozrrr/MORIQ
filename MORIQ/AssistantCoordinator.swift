@@ -72,7 +72,10 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
     private var verifyLiveFrameCount = 0
     #endif
     func enable() -> OSStatus {
-        GlobalShortcutRegistry.shared.enable(.assistant) { [weak self] in self?.show() }
+        guard !(Bundle.main.bundleIdentifier ?? "").hasPrefix("local.moriq.internal"), Bundle.main.object(forInfoDictionaryKey: "MORIQBuildFlavor") == nil else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused screen assistant capture\n".utf8)); return -50
+        }
+        return GlobalShortcutRegistry.shared.enable(.assistant) { [weak self] in self?.show() }
     }
     func disable() {
         GlobalShortcutRegistry.shared.disable(.assistant)
@@ -295,6 +298,7 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
     private func show(preview: Bool = false) {
         guard GlobalShortcutRegistry.shared.isEnabled(.assistant) || preview else { return }
         if panel?.isVisible == true { dismissPanel(); return }
+        if !preview { LocalDiagnostics.shared.record(.assistant, .open, .started) }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
         if panel == nil {
             let next = AssistantPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)

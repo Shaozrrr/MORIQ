@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AB1200000000000000000001 /* DeviceRenewalCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1200000000000000000002 /* DeviceRenewalCandidate.swift */; };
+        AAAAAAAAAAAAAAAAAAAAAA05 /* LocalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAAAAAAAAAAAAAAAAAAA06 /* LocalDiagnostics.swift */; };
+        AAAAAAAAAAAAAAAAAAAAAA03 /* CaptionWindowSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAAAAAAAAAAAAAAAAAAA04 /* CaptionWindowSizing.swift */; };
+        AAAAAAAAAAAAAAAAAAAAAA01 /* PermissionProbeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAAAAAAAAAAAAAAAAAAA02 /* PermissionProbeState.swift */; };
+		FA11EF001111111111111111 /* PunctCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11EF002222222222222222 /* PunctCoordinator.swift */; };
+		FA11CD001111111111111117 /* ManagedGuestTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222228 /* ManagedGuestTrial.swift */; };
+		FA11CD001111111111111116 /* RuntimeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222227 /* RuntimeEnvironment.swift */; };
+		FA11CD001111111111111115 /* CaptionSourceV2Reducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222226 /* CaptionSourceV2Reducer.swift */; };
+		FA11CD001111111111111114 /* CaptionReviewProduct.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222225 /* CaptionReviewProduct.swift */; };
+		FA11CD001111111111111113 /* ExperimentalCaptionReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222224 /* ExperimentalCaptionReview.swift */; };
+		FA11CD001111111111111111 /* CaptionLanePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222222 /* CaptionLanePages.swift */; };
+		FA11CD001111111111111112 /* CaptionScrollScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CD002222222222222223 /* CaptionScrollScheduler.swift */; };
+		FA11CB001111111111111111 /* CaptionLanguageResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11CB002222222222222222 /* CaptionLanguageResolver.swift */; };
 		B7D100000000000000000005 /* ExperimentalCaptionSpeakerAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D200000000000000000005 /* ExperimentalCaptionSpeakerAdapter.swift */; };
 		B7D100000000000000000004 /* CaptionSpeakerPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D200000000000000000004 /* CaptionSpeakerPipeline.swift */; };
 		B7D100000000000000000003 /* SpeakerDiarizationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D200000000000000000003 /* SpeakerDiarizationBridge.swift */; };
@@ -62,6 +75,19 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        AB1200000000000000000002 /* DeviceRenewalCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRenewalCandidate.swift; sourceTree = "<group>"; };
+        AAAAAAAAAAAAAAAAAAAAAA06 /* LocalDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDiagnostics.swift; sourceTree = "<group>"; };
+        AAAAAAAAAAAAAAAAAAAAAA04 /* CaptionWindowSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionWindowSizing.swift; sourceTree = "<group>"; };
+        AAAAAAAAAAAAAAAAAAAAAA02 /* PermissionProbeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionProbeState.swift; sourceTree = "<group>"; };
+		FA11EF002222222222222222 /* PunctCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PunctCoordinator.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222228 /* ManagedGuestTrial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedGuestTrial.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222227 /* RuntimeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEnvironment.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222226 /* CaptionSourceV2Reducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionSourceV2Reducer.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222225 /* CaptionReviewProduct.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionReviewProduct.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222224 /* ExperimentalCaptionReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExperimentalCaptionReview.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222222 /* CaptionLanePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionLanePages.swift; sourceTree = "<group>"; };
+		FA11CD002222222222222223 /* CaptionScrollScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionScrollScheduler.swift; sourceTree = "<group>"; };
+		FA11CB002222222222222222 /* CaptionLanguageResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionLanguageResolver.swift; sourceTree = "<group>"; };
 		B7D200000000000000000005 /* ExperimentalCaptionSpeakerAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExperimentalCaptionSpeakerAdapter.swift; sourceTree = "<group>"; };
 		B7D200000000000000000004 /* CaptionSpeakerPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionSpeakerPipeline.swift; sourceTree = "<group>"; };
 		B7D200000000000000000003 /* SpeakerDiarizationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerDiarizationBridge.swift; sourceTree = "<group>"; };
@@ -188,6 +214,7 @@
 				C3178A93012A46E0B83A1002 /* ManagedSpeechAudioBridge.swift */,
 				B3178A93012A46E0B83A1002 /* ManagedSpeechStream.swift */,
 				A2178A93012A46E0B83A1002 /* ManagedAIClient.swift */,
+				AB1200000000000000000002 /* DeviceRenewalCandidate.swift */,
 				DFEB77E49B795141CDFDDE0F /* DeepSeek.swift */,
 				FCF5926870A86144D55AD8D9 /* ConversionCoordinator.swift */,
 				A22222222222222222222222 /* ShelfCoordinator.swift */,
@@ -207,6 +234,15 @@
 				278C943AC51C72240DD996BC /* ScreenshotCoordinator.swift */,
 				BDFC61D759B26172A6E88E38 /* OCREngine.swift */,
 				FA11CA002222222222222222 /* LiveCaptions.swift */,
+				FA11CD002222222222222222 /* CaptionLanePages.swift */,
+				FA11CD002222222222222223 /* CaptionScrollScheduler.swift */,
+				FA11CD002222222222222224 /* ExperimentalCaptionReview.swift */,
+				FA11CD002222222222222225 /* CaptionReviewProduct.swift */,
+				FA11CD002222222222222226 /* CaptionSourceV2Reducer.swift */,
+				FA11EF002222222222222222 /* PunctCoordinator.swift */,
+				FA11CD002222222222222227 /* RuntimeEnvironment.swift */,
+				FA11CD002222222222222228 /* ManagedGuestTrial.swift */,
+				FA11CB002222222222222222 /* CaptionLanguageResolver.swift */,
 				B7D200000000000000000005 /* ExperimentalCaptionSpeakerAdapter.swift */,
 				B7D200000000000000000004 /* CaptionSpeakerPipeline.swift */,
 				B7D200000000000000000003 /* SpeakerDiarizationBridge.swift */,
@@ -214,6 +250,9 @@
 				B7D200000000000000000001 /* CaptionSpeakerAlignment.swift */,
 				FA22CB002222222222222222 /* LocalWhisperCaptions.swift */,
 				BA5B68752688D9068F619207 /* PermissionOnboarding.swift */,
+                AAAAAAAAAAAAAAAAAAAAAA06 /* LocalDiagnostics.swift */,
+                AAAAAAAAAAAAAAAAAAAAAA04 /* CaptionWindowSizing.swift */,
+                AAAAAAAAAAAAAAAAAAAAAA02 /* PermissionProbeState.swift */,
 				79156A811ACCFB76219475B0 /* MainFlow.swift */,
 				AC85DC321DC92BECA7314B48 /* WhaleBackground.swift */,
 				4FA701C0EBE81C2E3937F648 /* WhaleBackground.html */,
@@ -319,6 +358,7 @@
 				C3178A93012A46E0B83A1001 /* ManagedSpeechAudioBridge.swift in Sources */,
 				B3178A93012A46E0B83A1001 /* ManagedSpeechStream.swift in Sources */,
 				A2178A93012A46E0B83A1001 /* ManagedAIClient.swift in Sources */,
+				AB1200000000000000000001 /* DeviceRenewalCandidate.swift in Sources */,
 				1BCBCDE4F00B2869774A6F12 /* DeepSeek.swift in Sources */,
 				C366AC39D734F61273D00E22 /* ConversionCoordinator.swift in Sources */,
 				A11111111111111111111111 /* ShelfCoordinator.swift in Sources */,
@@ -338,6 +378,15 @@
 				9A181E96ADC3369280F74241 /* ScreenshotCoordinator.swift in Sources */,
 				D1E7ABB527BDFE5BA7E524C6 /* OCREngine.swift in Sources */,
 				FA11CA001111111111111111 /* LiveCaptions.swift in Sources */,
+				FA11CD001111111111111111 /* CaptionLanePages.swift in Sources */,
+				FA11CD001111111111111112 /* CaptionScrollScheduler.swift in Sources */,
+				FA11CD001111111111111113 /* ExperimentalCaptionReview.swift in Sources */,
+				FA11CD001111111111111114 /* CaptionReviewProduct.swift in Sources */,
+				FA11CD001111111111111115 /* CaptionSourceV2Reducer.swift in Sources */,
+				FA11EF001111111111111111 /* PunctCoordinator.swift in Sources */,
+				FA11CD001111111111111116 /* RuntimeEnvironment.swift in Sources */,
+				FA11CD001111111111111117 /* ManagedGuestTrial.swift in Sources */,
+				FA11CB001111111111111111 /* CaptionLanguageResolver.swift in Sources */,
 				B7D100000000000000000005 /* ExperimentalCaptionSpeakerAdapter.swift in Sources */,
 				B7D100000000000000000004 /* CaptionSpeakerPipeline.swift in Sources */,
 				B7D100000000000000000003 /* SpeakerDiarizationBridge.swift in Sources */,
@@ -345,6 +394,9 @@
 				B7D100000000000000000001 /* CaptionSpeakerAlignment.swift in Sources */,
 				FA22CB001111111111111111 /* LocalWhisperCaptions.swift in Sources */,
 				9C355EB02C4D1A4ADBA70DBA /* PermissionOnboarding.swift in Sources */,
+                AAAAAAAAAAAAAAAAAAAAAA05 /* LocalDiagnostics.swift in Sources */,
+                AAAAAAAAAAAAAAAAAAAAAA03 /* CaptionWindowSizing.swift in Sources */,
+                AAAAAAAAAAAAAAAAAAAAAA01 /* PermissionProbeState.swift in Sources */,
 				4CF81B57CBD1560431F8561A /* MainFlow.swift in Sources */,
 				9FF42083C92F1B3394F874DA /* WhaleBackground.swift in Sources */,
 			);
@@ -390,6 +442,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = local.moriq.app;
 				PRODUCT_NAME = MORIQ;
 				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) MORIQ_NATIVE_TRANSLATION_PRODUCT MORIQ_AUTO_TRANSLATION_PRODUCT";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -503,7 +556,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG MORIQ_SPEAKER_EXPERIMENTAL";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG MORIQ_SPEAKER_EXPERIMENTAL MORIQ_CAPTION_REVIEW_EXPERIMENTAL";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 			};

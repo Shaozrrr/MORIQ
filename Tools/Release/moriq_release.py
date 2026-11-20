@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import ipaddress
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = ROOT / 'MORIQ.xcodeproj'
@@ -95,15 +97,72 @@ def require_developer_signature(path, runner=run):
     if 'Authority=Developer ID Application:' not in desc or 'runtime' not in desc or 'Timestamp=' not in desc:
         raise ReleaseError(f'嵌套组件缺少 Developer ID、加固运行时或可信时间戳：{path}')
 
-def build(out):
+def validate_endpoint(value, scheme, path):
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
+        if parsed.scheme != scheme or not host or parsed.username is not None or parsed.password is not None or '?' in value or '#' in value or parsed.path != path:
+            raise ValueError()
+        if port is not None and not 1 <= port <= 65535: raise ValueError()
+        try: ipaddress.ip_address(host)
+        except ValueError: pass
+        else: raise ValueError()
+        labels = host.lower().split('.')
+        if len(labels) < 2 or labels[-1] in ('local', 'localhost', 'test', 'invalid', 'example', 'internal') or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in labels): raise ValueError()
+        if host.lower() in ('example.com', 'example.org', 'example.net') or host.lower().endswith(('.example.com', '.example.org', '.example.net')): raise ValueError()
+        return value
+    except (ValueError, UnicodeError):
+        raise ReleaseError('服务地址须使用远端域名及指定的安全协议和路径，不能包含凭证、参数或测试地址。')
+
+def validate_speech_endpoint(value):
+    return validate_endpoint(value, 'wss', '/v1/speech/stream')
+
+def validate_ai_endpoint(value):
+    return validate_endpoint(value, 'https', '/v1/chat/completions')
+
+def validate_activation_endpoint(value):
+    return validate_endpoint(value, 'https', '/v1/devices/renew')
+
+def build(out, speech_endpoint=None, caption_punct_available=False, ai_endpoint=None, full_featured=False, activation_endpoint=None, shared_leases=False, anonymous_device=False):
+    if any(type(value) is not bool for value in (caption_punct_available, full_featured, shared_leases, anonymous_device)): raise ReleaseError('构建能力标记无效。')
+    if anonymous_device and not shared_leases: raise ReleaseError('免注册接入需要共享会话和完整在线服务配置。')
+    if shared_leases and not all((speech_endpoint,ai_endpoint,activation_endpoint)): raise ReleaseError('共享会话需要字幕、助手和设备激活服务地址。')
+    if full_featured and (not shared_leases or not all((speech_endpoint, ai_endpoint, activation_endpoint))): raise ReleaseError('好友版完整功能构建需要字幕、助手、设备激活服务及共享会话。')
+    if caption_punct_available and speech_endpoint is None: raise ReleaseError('启用增强字幕能力需要已核验的字幕服务地址。')
+    if speech_endpoint is not None: validate_speech_endpoint(speech_endpoint)
+    if ai_endpoint is not None: validate_ai_endpoint(ai_endpoint)
+    if activation_endpoint is not None: validate_activation_endpoint(activation_endpoint)
+    if shared_leases and len({(urlsplit(value).hostname,urlsplit(value).port or 443) for value in (speech_endpoint,ai_endpoint,activation_endpoint)}) != 1:
+        raise ReleaseError('共享会话的三个服务必须使用同一主机和端口。')
     output = safe_new_dir(out)
     derived = output / 'derived'
-    run(['xcodebuild', '-project', PROJECT, '-scheme', 'MORIQ', '-configuration', 'Release',
+    args = ['xcodebuild', '-project', PROJECT, '-scheme', 'MORIQ', '-configuration', 'Release',
          '-derivedDataPath', derived, 'ARCHS=arm64 x86_64', 'ONLY_ACTIVE_ARCH=NO',
-         'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO', 'build'])
+         'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO']
+    if speech_endpoint is not None:
+        args.append('SWIFT_ACTIVE_COMPILATION_CONDITIONS=MORIQ_NATIVE_TRANSLATION_PRODUCT MORIQ_AUTO_TRANSLATION_PRODUCT')
+    run(args + ['build'])
     app = derived / 'Build/Products/Release/MORIQ.app'
     if not app.is_dir(): raise ReleaseError('未找到构建产物。')
     assert_universal(app)
+    if speech_endpoint is not None or ai_endpoint is not None or activation_endpoint is not None:
+        info = app / 'Contents/Info.plist'
+        with info.open('rb') as f: metadata = plistlib.load(f)
+        if speech_endpoint is not None:
+            metadata['MORIQManagedSpeechEndpoint'] = speech_endpoint
+            metadata['MORIQNativeCaptionMode'] = 'batch-v1'
+            metadata['MORIQCaptionAutomaticMode'] = 'trusted-v1'
+            metadata['MORIQCaptionPunctAvailable'] = caption_punct_available
+        if ai_endpoint is not None:
+            metadata['MORIQManagedAIEndpoint'] = ai_endpoint
+        if activation_endpoint is not None:
+            metadata['MORIQDeviceActivationEndpoint'] = activation_endpoint
+        if shared_leases:
+            metadata['MORIQSharedSessionLeasesEnabled'] = True
+        if anonymous_device:
+            metadata['MORIQAnonymousDeviceEnabled'] = True
+        with info.open('wb') as f: plistlib.dump(metadata, f, fmt=plistlib.FMT_XML, sort_keys=False)
     print('本地双架构未签名构建完成:', app)
     print('尚未签名、公证或发布。')
 
@@ -178,13 +237,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('preflight'); p.add_argument('--identity', required=True)
-    p = sub.add_parser('build'); p.add_argument('--out', required=True)
+    p = sub.add_parser('build'); p.add_argument('--out', required=True); p.add_argument('--speech-endpoint', help='已核验的远端字幕 WSS 地址；启用正式字幕和自动译文'); p.add_argument('--caption-punct-available', action='store_true', help='在设置中提供增强字幕开关（仍默认关闭）'); p.add_argument('--ai-endpoint', help='已核验的远端 HTTPS 助手服务地址'); p.add_argument('--activation-endpoint', help='已核验的 HTTPS 设备续期服务地址'); p.add_argument('--shared-leases', action='store_true', help='显式启用经过联测的设备共享会话'); p.add_argument('--full-featured', action='store_true', help='要求好友版字幕、助手、设备激活及共享会话全部配置'); p.add_argument('--anonymous-device', action='store_true', help='启用免注册接入，须先验证服务端和防刷')
     p = sub.add_parser('sign'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True); p.add_argument('--version', required=True); p.add_argument('--build-number', required=True)
     p = sub.add_parser('package'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True)
     a = parser.parse_args(argv)
     try:
         if a.command == 'preflight': identity_check(a.identity); print('找到有效证书；这不代表可公证或可发行。')
-        elif a.command == 'build': build(a.out)
+        elif a.command == 'build': build(a.out, a.speech_endpoint, a.caption_punct_available, a.ai_endpoint, a.full_featured, a.activation_endpoint, a.shared_leases, a.anonymous_device)
         elif a.command == 'sign': sign(a.app, a.out, a.identity, a.version, a.build_number)
         else: package(a.app, a.out, a.identity)
     except (ReleaseError, FileNotFoundError, PermissionError, plistlib.InvalidFileException, OSError) as e:

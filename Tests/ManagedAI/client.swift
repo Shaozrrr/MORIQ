@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+actor LeaseReleaseCounter { var count = 0; func release() { count += 1 } }
 @main struct Run {
  static func main() async throws {
     let token = ProcessInfo.processInfo.environment["TEST_ACCOUNT_TOKEN"]!
@@ -40,12 +41,18 @@ import AppKit
     catch DeepSeekError.requestTooLarge {}
     do { try await routed.stream(messages:[ChatMessage(role:"user",content:"__fail__")]) { _ in }; fatalError("upstream error accepted") }
     catch DeepSeekError.http(502) {}
-    let slow = Task { try await routed.stream(messages:[ChatMessage(role:"user",content:"__slow__")]) { _ in } }
+    let releaseCounter = LeaseReleaseCounter()
+    var slowProvider = routed
+    slowProvider.managedLease = { (token, { await releaseCounter.release() }) }
+    let slow = Task { try await slowProvider.stream(messages:[ChatMessage(role:"user",content:"__slow__")]) { _ in } }
     try await Task.sleep(for: .milliseconds(400))
     let stoppedAt = Date(); slow.cancel()
     do { try await slow.value; fatalError("cancelled request completed") }
     catch is CancellationError {}
     catch let error as URLError where error.code == .cancelled {}
+    try await Task.sleep(for: .milliseconds(100))
+    let releases = await releaseCounter.count
+    guard releases == 1 else { fatalError("cancelled stream did not release lease exactly once") }
     guard Date().timeIntervalSince(stoppedAt) < 2 else { fatalError("cancellation too slow") }
     let redirectPort = ProcessInfo.processInfo.environment["TEST_REDIRECT_PORT"]!
     let redirect = try ManagedAIClient(endpoint: URL(string:"http://127.0.0.1:\(redirectPort)/redirect")!, tokenLoader: { token }, allowLoopbackForTesting: true)

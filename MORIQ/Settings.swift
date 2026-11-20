@@ -90,10 +90,22 @@ struct SettingsView: View {
         var title: String { switch self { case .features: "功能设置"; case .shortcuts: "快捷键"; case .general: "通用设置" } }
         var symbol: String { switch self { case .features: "square.grid.2x2"; case .shortcuts: "keyboard"; case .general: "slider.horizontal.3" } }
     }
+    @State private var diagnosticsStopping = false
+    @State private var localDiagnosticCounts: [DiagnosticFeature:Int] = [:]
+    @State private var localDiagnosticMessage = ""
+    @AppStorage("moriq.localDiagnostics.enabled") private var localDiagnosticsEnabled = false
     @AppStorage("moriq.hapticsEnabled") private var hapticsEnabled = true
     @AppStorage("moriq.converterModifier") private var converterModifier = "shift"
     @AppStorage("moriq.permissionDarkMode") private var dark = false
     @AppStorage("moriq.managedSpeechConsent") private var managedSpeechConsent = false
+    @AppStorage("moriq.caption.punct.enabled") private var captionPunctEnabled = false
+    @State private var managedServiceToken = ""
+    @State private var managedServiceMessage = ""
+    @State private var invitation = ""
+    @State private var activationMessage = ""
+    @State private var activationBusy = false
+    @State private var activationPending = false
+    private let deviceActivation = DeviceRenewalCoordinator.shared
     @State private var section: Section = .features
     @StateObject private var shortcutRecorder = ShortcutRecorder()
     @ObservedObject var store: SettingsStore
@@ -235,17 +247,144 @@ struct SettingsView: View {
                 Spacer()
                 Toggle("触觉反馈", isOn: $hapticsEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }.frame(minHeight: 70)
+            Divider()
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("本机诊断记录").font(.system(size: 13, weight: .semibold))
+                    Text("仅本机记录结果与耗时分档，不上传。运行时清理 7 天前数据，上限 512 KB；关闭后停止记录并保留旧记录。未知或损坏记录会暂停清理，空间不足时暂停写入，可手动清除。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("本机诊断记录", isOn: $localDiagnosticsEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(diagnosticsStopping)
+                    .onChange(of: localDiagnosticsEnabled) { _, enabled in if enabled { LocalDiagnostics.shared.record(.settings, .toggle, .success) } else {
+                        diagnosticsStopping = true; localDiagnosticMessage = "正在停止记录…"
+                        DispatchQueue.global(qos: .utility).async {
+                            LocalDiagnostics.shared.disableAndDrain()
+                            DispatchQueue.main.async { diagnosticsStopping = false; localDiagnosticMessage = "已停止记录，旧记录仍保留" }
+                        }
+                    } }
+            }.frame(minHeight: 70)
+            HStack {
+                Button("查看本机诊断汇总") {
+                    LocalDiagnostics.shared.summary { counts in
+                        localDiagnosticCounts = counts
+                        let health=LocalDiagnostics.shared.health()
+                        let base=counts.isEmpty ? "暂无记录" : "共 \(counts.values.reduce(0,+)) 条事件，仅保存在本机"
+                        localDiagnosticMessage = base + "；本次队列丢弃 \(health.dropped) 条、写入失败 \(health.writeFailures) 条、容量轮转 \(health.capacityEvictions) 条"
+                    }
+                }
+                Button("清除本机诊断记录") {
+                    LocalDiagnostics.shared.clear { ok in localDiagnosticCounts = [:]; localDiagnosticMessage = ok ? "已清除" : "无法清除" }
+                }
+                Text(localDiagnosticMessage).font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+            }.font(.system(size: 11)).frame(minHeight: 42)
+            if !localDiagnosticCounts.isEmpty {
+                Text("开始与结束分别计为事件，不等于使用次数；字幕启动成功仅表示采集已启动。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
+                Text(DiagnosticFeature.allCases.compactMap { feature in localDiagnosticCounts[feature].map { "\(feature.label) \($0)" } }.joined(separator: "  ·  "))
+                    .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 12)
+            }
             if Bundle.main.object(forInfoDictionaryKey: "MORIQManagedSpeechEndpoint") != nil {
                 Divider()
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("在线字幕翻译").font(.system(size: 13, weight: .semibold))
-                        Text("开启字幕时，将系统音频发送至 MORIQ 及其语音服务进行识别和翻译。")
+                        Text("使用在线字幕时，系统声音会发送至 MORIQ 及语音服务用于识别；识别出的文字可能发送至翻译服务并自动翻译。关闭字幕或关闭此授权可停止后续发送。")
                             .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     Toggle("允许在线字幕翻译", isOn: $managedSpeechConsent).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }.frame(minHeight: 70)
+                if Bundle.main.object(forInfoDictionaryKey: "MORIQCaptionPunctAvailable") as? Bool == true {
+                    Divider()
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("增强实时翻译").font(.system(size: 13, weight: .semibold))
+                            Text("按句更新译文；此模式暂不支持手动校订。使用时发送电脑系统声音，关闭后新会话生效。")
+                                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Toggle("增强实时翻译", isOn: $captionPunctEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                    }.frame(minHeight: 70)
+                }
+                Divider()
+                if Bundle.main.object(forInfoDictionaryKey: "MORIQAnonymousDeviceEnabled") as? Bool != true {
+                if let configured = Bundle.main.object(forInfoDictionaryKey: "MORIQDeviceActivationEndpoint") as? String,
+                   let endpoint = URL(string: configured) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("连接 MORIQ 服务").font(.system(size: 13, weight: .semibold))
+                        Text("使用私人邀请码在这台 Mac 上启用在线功能。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        HStack {
+                            SecureField("私人邀请码", text: $invitation).textFieldStyle(.roundedBorder)
+                                .disabled(activationPending || activationBusy)
+                            Button(activationPending ? "重试连接" : "连接") {
+                                activationBusy = true; activationMessage = "正在连接…"
+                                Task {
+                                    do {
+                                        try RuntimeCredentialPolicy.current.requireAccess()
+                                        try RuntimeCredentialPolicy.current.requireNetwork()
+                                        let saved = try DeviceRenewalKeychain().load()
+                                        let code = saved?.pendingInvite ?? invitation
+                                        let transport = try DeviceRenewalTransport(endpoint: endpoint)
+                                        try await deviceActivation.activate(invite: code, using: transport)
+                                        invitation = ""; activationPending = false; activationMessage = "已连接。"
+                                    } catch {
+                                        if (try? RuntimeCredentialPolicy.current.requireAccess()) != nil {
+                                            activationPending = (try? DeviceRenewalKeychain().load()?.pendingInvite) != nil
+                                        }
+                                        activationMessage = "连接未完成，请检查网络或邀请码后重试。"
+                                    }
+                                    activationBusy = false
+                                }
+                            }.disabled(activationBusy || (!activationPending && invitation.isEmpty))
+                            if activationPending {
+                                Button("更换邀请码") {
+                                    do {
+                                        try RuntimeCredentialPolicy.current.requireAccess()
+                                        if try DeviceRenewalKeychain().load()?.pendingInvite != nil {
+                                            try DeviceRenewalKeychain().delete()
+                                            activationPending = false; invitation = ""; activationMessage = "请输入新的邀请码。"
+                                        }
+                                    } catch { activationMessage = "无法更新钥匙串，请稍后重试。" }
+                                }.disabled(activationBusy)
+                            }
+                        }
+                        if !activationMessage.isEmpty { Text(activationMessage).font(.system(size: 11)).foregroundStyle(.secondary) }
+                    }.padding(.vertical, 14)
+                     .onAppear {
+                         if (try? RuntimeCredentialPolicy.current.requireAccess()) != nil {
+                             activationPending = (try? DeviceRenewalKeychain().load()?.pendingInvite) != nil
+                         }
+                     }
+                    Divider()
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("字幕服务凭证").font(.system(size: 13, weight: .semibold))
+                    Text("输入分配给你的服务凭证，保存在这台 Mac 的钥匙串中。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    HStack {
+                        SecureField("服务凭证", text: $managedServiceToken)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("managedServiceToken")
+                        Button("保存") {
+                            do {
+                                try ManagedAIAccountToken().save(managedServiceToken)
+                                managedServiceToken = ""
+                                managedServiceMessage = "凭证已保存。"
+                            } catch ManagedAIError.deviceAlreadyConnected {
+                                managedServiceMessage = "此设备已连接服务，无需再保存服务凭证。"
+                            } catch {
+                                managedServiceMessage = "保存失败，请检查凭证或钥匙串权限。"
+                            }
+                        }.disabled(managedServiceToken.isEmpty)
+                    }
+                    if !managedServiceMessage.isEmpty {
+                        Text(managedServiceMessage).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 14)
+                }
 
             }
         }

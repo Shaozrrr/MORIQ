@@ -29,7 +29,7 @@ enum StickyNoteGeometry {
 @MainActor final class StickyNoteStore: ObservableObject {
     @Published private(set) var notes: [StickyNote] = []
     @Published private(set) var error: String?
-    private let file: URL
+    private let file: URL?
     private var pending: Task<Void, Never>?
     private var dirty = false
     private(set) var canWrite = true
@@ -39,6 +39,10 @@ enum StickyNoteGeometry {
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         do { notes = try JSONDecoder().decode([StickyNote].self, from: Data(contentsOf: file)) }
         catch { canWrite = false; self.error = "便签无法读取，原数据未覆盖。" }
+    }
+    init(inMemory: Bool) {
+        precondition(inMemory)
+        file = nil
     }
     func create() -> UUID? {
         guard canWrite else { return nil }
@@ -74,15 +78,18 @@ enum StickyNoteGeometry {
     @discardableResult func flush() -> Bool {
         pending?.cancel(); pending = nil
         guard dirty else { return true }
-        guard canWrite else { return false }
+        guard canWrite else { LocalDiagnostics.shared.record(.notes, .save, .failure); return false }
+        guard let file else { dirty = false; error = nil; return true }
+        let diagnosticStart=ProcessInfo.processInfo.systemUptime
         do {
             let directory = file.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let encoded = try JSONEncoder().encode(notes)
             try encoded.write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            LocalDiagnostics.shared.record(.notes, .save, .success, duration: ProcessInfo.processInfo.systemUptime-diagnosticStart)
             dirty = false; error = nil; return true
-        } catch { self.error = "便签保存失败，请检查磁盘空间和访问权限。"; return false }
+        } catch { LocalDiagnostics.shared.record(.notes, .save, .failure, duration: ProcessInfo.processInfo.systemUptime-diagnosticStart); self.error = "便签保存失败，请检查磁盘空间和访问权限。"; return false }
     }
 }
 
@@ -91,9 +98,12 @@ enum StickyNoteGeometry {
     private var windows: [UUID: NSPanel] = [:]
     private var closingForShutdown = false
     private(set) var enabled = false
-    init(file: URL? = nil) {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        store = StickyNoteStore(file: file ?? base.appendingPathComponent("MORIQ/sticky-notes.json"))
+    init(file: URL? = nil, inMemory: Bool = false) {
+        if inMemory { store = StickyNoteStore(inMemory: true) }
+        else {
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            store = StickyNoteStore(file: file ?? base.appendingPathComponent("MORIQ/sticky-notes.json"))
+        }
         super.init()
     }
     func enable() {
@@ -106,7 +116,10 @@ enum StickyNoteGeometry {
         store.flush()
     }
     func create() {
-        guard enabled, let id = store.create() else { return }
+        guard enabled else { return }
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        guard let id = store.create() else { LocalDiagnostics.shared.record(.notes, .complete, .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart); return }
+        LocalDiagnostics.shared.record(.notes, .complete, .success, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart)
         show(id, activate: true)
     }
     func showAll() {
@@ -151,6 +164,7 @@ enum StickyNoteGeometry {
         store.updateWindow(panel.frame, open: true, id: id)
     }
     func windowWillClose(_ notification: Notification) {
+        LocalDiagnostics.shared.record(.notes, .close, .success)
         guard let panel = notification.object as? NSPanel, let id = windows.first(where: { $0.value === panel })?.key else { return }
         if !closingForShutdown { store.updateWindow(panel.frame, open: false, id: id); store.flush() }
         windows.removeValue(forKey: id)

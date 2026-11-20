@@ -30,6 +30,10 @@ enum LocalWhisperModel {
         return hash.finalize().map { String(format: "%02x", $0) }.joined() == expected
     }
     static func prepare(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+        guard !(Bundle.main.bundleIdentifier ?? "").hasPrefix("local.moriq.internal"), Bundle.main.object(forInfoDictionaryKey: "MORIQBuildFlavor") == nil else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused model file and network access\n".utf8))
+            throw ModelError.download
+        }
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("SpeechEngine/ggml-base.bin"),
            await Task.detached(priority: .utility, operation: { valid(bundled) }).value {
             return bundled

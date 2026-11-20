@@ -25,16 +25,17 @@ enum ShelfTransfer {
     private let key = "moriq.shelf.bookmarks"
     init(defaults: UserDefaults = .standard) { self.defaults = defaults; restore() }
     func add(_ urls: [URL]) {
+        let originalCount = items.count
         var known = Set(items.map(\.url))
         for url in urls where url.isFileURL && FileManager.default.fileExists(atPath: url.path) {
             let clean = url.standardizedFileURL
             guard known.insert(clean).inserted else { continue }
             items.append(ShelfEntry(id: UUID(), url: clean))
         }
-        persist()
+        persist(); LocalDiagnostics.shared.record(.shelf, .add, items.count > originalCount ? .success : .failure)
     }
-    func remove(_ id: UUID) { items.removeAll { $0.id == id }; persist() }
-    func remove(_ ids: Set<UUID>) { items.removeAll { ids.contains($0.id) }; persist() }
+    func remove(_ id: UUID) { let count=items.count;items.removeAll { $0.id == id };persist();LocalDiagnostics.shared.record(.shelf, .remove, items.count<count ? .success : .failure) }
+    func remove(_ ids: Set<UUID>) { let count=items.count;items.removeAll { ids.contains($0.id) };persist();LocalDiagnostics.shared.record(.shelf, .remove, items.count<count ? .success : .failure) }
     func refreshMovedFiles() async {
         guard let records = defaults.array(forKey: key) as? [[String: Any]], records.count == items.count else { return }
         let snapshot = zip(items, records).compactMap { item, record -> (UUID, URL, Data)? in
@@ -108,7 +109,8 @@ enum ShelfDropDecoder {
     private var panel: NSPanel?
     private var dragMonitor: DragActivityMonitor?
     private var closeTask: Task<Void, Never>?
-    private var idleChangeCount = NSPasteboard(name: .drag).changeCount
+    private var idleChangeCount: Int
+    private let allowSystemDrag: Bool
     private var edgeSince: Date?
     private var mouseWasInside = false
     private var globalPointerMonitor: Any?
@@ -118,8 +120,14 @@ enum ShelfDropDecoder {
     private var lastReportedProximity: Int = -1
     #endif
 
-    init(store: ShelfStore? = nil) { self.injectedStore = store }
+    init(store: ShelfStore? = nil, allowSystemDrag: Bool = true) {
+        self.injectedStore = store; self.allowSystemDrag = allowSystemDrag
+        idleChangeCount = allowSystemDrag ? NSPasteboard(name: .drag).changeCount : 0
+    }
     func enable() {
+        guard allowSystemDrag else {
+            FileHandle.standardError.write(Data("MORIQ runtime refused shelf drag monitoring\n".utf8)); return
+        }
         guard dragMonitor == nil else { return }
         let monitor = DragActivityMonitor(tick: { [weak self] in self?.poll() }, onMouseDown: { [weak self] in
             self?.idleChangeCount = NSPasteboard(name: .drag).changeCount
@@ -397,12 +405,14 @@ struct ShelfView: View {
     private func copySelection() {
         let items = store.items.filter { selected.contains($0.id) }
         guard !items.isEmpty else { return }
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
         switch ShelfTransfer.copy(items, to: pasteboard) {
-        case .unavailable: transferError = "部分文件不可用，请先取消选择"; return
-        case .failed: transferError = "复制失败，请重试"; return
+        case .unavailable: LocalDiagnostics.shared.record(.shelf, .copy, .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart); transferError = "部分文件不可用，请先取消选择"; return
+        case .failed: LocalDiagnostics.shared.record(.shelf, .copy, .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart); transferError = "复制失败，请重试"; return
         case .copied: break
         }
         transferError = nil
+        LocalDiagnostics.shared.record(.shelf, .copy, .success, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart)
         #if DEBUG
         if CommandLine.arguments.contains("--preview-shelf-selection") { print("TEST_SHELF_COPIED=\(pasteboard.pasteboardItems?.count ?? 0)"); fflush(stdout) }
         #endif
@@ -717,6 +727,7 @@ final class ShelfFileDragView: NSView, NSDraggingSource {
     }
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        LocalDiagnostics.shared.record(.shelf, .drag, operation.isEmpty ? .cancelled : .success)
         dragState?(false)
         #if DEBUG
         if CommandLine.arguments.contains("--preview-shelf-only") || CommandLine.arguments.contains("--preview-shelf-drag") { print("TEST_DRAG_END operation=\(operation.rawValue)"); fflush(stdout) }

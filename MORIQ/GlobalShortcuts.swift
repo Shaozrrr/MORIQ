@@ -97,6 +97,7 @@ enum GlobalShortcutFeature: String, CaseIterable {
         }
         var ref: EventHotKeyRef?
         let status = register(current(feature), for: feature, into: &ref)
+        LocalDiagnostics.shared.record(.shortcuts, .start, status == noErr && ref != nil ? .success : .failure)
         guard status == noErr, let ref else {
             if retryOnUpdate { actions[feature] = action; awaitingShortcut.insert(feature) }
             return status == noErr ? OSStatus(eventInternalErr) : status

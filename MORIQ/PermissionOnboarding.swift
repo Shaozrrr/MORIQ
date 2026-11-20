@@ -7,6 +7,7 @@ import ScreenCaptureKit
 import Darwin
 
 enum FolderAccessProbe {
+    @MainActor static let state = PermissionProbeState()
     @MainActor static var verifiedThisLaunch = false
     static func check(paths: [String]) -> Bool {
         guard !paths.isEmpty else { return false }
@@ -29,6 +30,7 @@ enum FolderAccessProbe {
 }
 
 enum DirectScreenAccessProbe {
+    @MainActor static let state = PermissionProbeState()
     // A previous release checked an app-owned window, which did not reliably
     // exercise the direct display path used by screenshots and the assistant.
     static let verifiedKey = "moriq.directDisplayCaptureVerified.v2"
@@ -54,19 +56,23 @@ struct PermissionOnboardingView: View {
     var autoEnterWhenReady = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("moriq.permissionDarkMode") private var dark = false
+    @AppStorage("moriq.foldersVerified") private var foldersPreviouslyVerified = false
     @State private var audioGranted = CaptionAudioPermissionProbe.verifiedThisLaunch
     @State private var audioChecking = false
     @State private var audioAutoCheckStarted = false
     @State private var audioStatus = ""
-    @State private var screenGranted = CGPreflightScreenCaptureAccess()
-    @State private var accessibilityGranted = AXIsProcessTrusted()
+    @State private var screenGranted = RuntimeEnvironment.permitsCurrent(.systemPermissions) && CGPreflightScreenCaptureAccess()
+    @State private var accessibilityGranted = RuntimeEnvironment.permitsCurrent(.systemPermissions) && AXIsProcessTrusted()
     @State private var foldersGranted = FolderAccessProbe.verifiedThisLaunch
     @State private var directCaptureGranted = DirectScreenAccessProbe.verifiedThisLaunch
     @State private var foldersChecking = false
     @State private var captureChecking = false
+    @State private var folderCheckGeneration = UUID()
+    @State private var captureCheckGeneration = UUID()
     @State private var accessMessage = ""
     @State private var screenRequested = false
     @State private var accessibilityRequested = false
+    @State private var initialPermissionSnapshotRecorded = false
     @State private var foldersRequested = false
     @State private var firstLine = ""
     @State private var secondLine = ""
@@ -76,7 +82,9 @@ struct PermissionOnboardingView: View {
     @State private var enteringHover = false
     @State private var selectedPermission: String?
     @State private var permissionWidth: CGFloat = 300
+    @State private var showRecognitionHelp = false
     private let permissionRefresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let probeFinished = NotificationCenter.default.publisher(for: Notification.Name("MORIQPermissionProbeFinished"))
     private let blue = Color(red: 37/255, green: 99/255, blue: 1)
     private var ready: Bool { screenGranted && accessibilityGranted && foldersGranted && !foldersChecking && directCaptureGranted && audioGranted && !audioChecking }
     var body: some View {
@@ -121,21 +129,40 @@ struct PermissionOnboardingView: View {
                     withAnimation(.easeOut(duration: 0.22)) { accessibilityGranted = true }
                 }
             } else {
-                if UserDefaults.standard.bool(forKey: "moriq.foldersVerified") && !foldersChecking { recheckFolders() }
+                if foldersPreviouslyVerified && !foldersChecking { recheckFolders() }
                 refresh(); if screenGranted && !directCaptureGranted && !captureChecking { requestDirectCapture() }
             }
             #else
-            if UserDefaults.standard.bool(forKey: "moriq.foldersVerified") && !foldersChecking { recheckFolders() }
+            if foldersPreviouslyVerified && !foldersChecking { recheckFolders() }
             refresh()
             if screenGranted && !directCaptureGranted && !captureChecking { requestDirectCapture() }
             #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if RuntimeEnvironment.permitsCurrent(.systemPermissions) { LocalDiagnostics.shared.record(.permissions,.foreground,.started,stage:.permissionForeground) }
             refresh()
-            if (foldersRequested || UserDefaults.standard.bool(forKey: "moriq.foldersVerified")) && !foldersChecking { recheckFolders() }
+            if (foldersRequested || foldersPreviouslyVerified) && !foldersChecking { recheckFolders() }
         }
         .onReceive(permissionRefresh) { _ in refresh() }
+        .onDisappear {
+            FolderAccessProbe.state.invalidate(); DirectScreenAccessProbe.state.invalidate(); CaptionAudioPermissionProbe.state.invalidate()
+            foldersChecking = false; captureChecking = false; audioChecking = false; audioAutoCheckStarted = false
+        }
+        .onReceive(probeFinished) { notification in
+            guard let raw = notification.object as? String, let kind = PermissionProbeKind(rawValue: raw) else { return }
+            switch kind {
+            case .folders:
+                if PermissionProbeRetry.shouldRetry(kind, granted: foldersGranted, previouslyRequested: foldersPreviouslyVerified || foldersRequested, screenAllowed: screenGranted) && !foldersChecking { recheckFolders() }
+            case .screen:
+                if PermissionProbeRetry.shouldRetry(kind, granted: directCaptureGranted, previouslyRequested: true, screenAllowed: screenGranted && CGPreflightScreenCaptureAccess()) && !captureChecking { requestDirectCapture() }
+            case .audio:
+                if PermissionProbeRetry.shouldRetry(kind, granted: audioGranted, previouslyRequested: CaptionAudioPermissionProbe.previouslyVerified, screenAllowed: screenGranted && CGPreflightScreenCaptureAccess()) && !audioChecking {
+                    audioAutoCheckStarted = true; requestCaptionAudio(automatic: true)
+                }
+            }
+        }
         .onChange(of: ready, initial: true) { _, isReady in
+            if isReady { LocalDiagnostics.shared.record(.onboarding, .complete, .success) }
             if isReady && autoEnterWhenReady { finish() }
         }
         .task { await typeIntroduction() }
@@ -188,6 +215,10 @@ struct PermissionOnboardingView: View {
                         .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
                         .padding(.top, 12)
                         .accessibilityIdentifier("permissionDetail")
+                    if !screenGranted || !accessibilityGranted {
+                        PermissionRecognitionHelp(expanded: $showRecognitionHelp)
+                            .padding(.top, 5)
+                    }
                     if !accessMessage.isEmpty && !["系统音频检查完成。", "文件夹访问已就绪。", "屏幕读取检查已完成；系统可能定期再次提醒。"].contains(accessMessage) {
                         Text(accessMessage).font(.system(size: 10)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
@@ -247,6 +278,7 @@ struct PermissionOnboardingView: View {
         .overlay(alignment: .bottom) { Divider().opacity(dark ? 0.35 : 0.7) }
     }
     private func refresh() {
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
         #if DEBUG
         if CommandLine.arguments.contains("--preview-permission-animation") { return }
         #endif
@@ -255,6 +287,17 @@ struct PermissionOnboardingView: View {
         }
         let screen = CGPreflightScreenCaptureAccess()
         let accessibility = AXIsProcessTrusted()
+        // Record the same values used for the UI once per view lifetime.
+        // LocalDiagnostics is opt-in and stores no screen or audio content.
+        if !initialPermissionSnapshotRecorded {
+            initialPermissionSnapshotRecorded = true
+            LocalDiagnostics.shared.record(.permissions, .check, screen ? .success : .failure, stage: .permissionScreen)
+            LocalDiagnostics.shared.record(.permissions, .check, accessibility ? .success : .failure, stage: .permissionAccessibility)
+        }
+        if !screen {
+            CaptionAudioPermissionProbe.state.invalidate()
+            audioChecking = false; audioAutoCheckStarted = false
+        }
         if !screen && (audioGranted || CaptionAudioPermissionProbe.previouslyVerified) {
             audioGranted = false; CaptionAudioPermissionProbe.verifiedThisLaunch = false
             CaptionAudioPermissionProbe.previouslyVerified = false; audioAutoCheckStarted = false
@@ -264,13 +307,20 @@ struct PermissionOnboardingView: View {
             audioAutoCheckStarted = true
             DispatchQueue.main.async { requestCaptionAudio(automatic: true) }
         }
+        if !screen {
+            DirectScreenAccessProbe.state.invalidate()
+            captureChecking = false
+        }
         if !screen && directCaptureGranted {
             directCaptureGranted = false
             DirectScreenAccessProbe.verifiedThisLaunch = false
+            DirectScreenAccessProbe.state.invalidate()
             UserDefaults.standard.set(false, forKey: DirectScreenAccessProbe.verifiedKey)
         }
         if screen { PermissionRelaunch.shared.granted("screen") }
         if accessibility { PermissionRelaunch.shared.granted("accessibility") }
+        if screen != screenGranted { LocalDiagnostics.shared.record(.permissions,.complete,screen ? .success : .failure,stage:.permissionScreen) }
+        if accessibility != accessibilityGranted { LocalDiagnostics.shared.record(.permissions,.complete,accessibility ? .success : .failure,stage:.permissionAccessibility) }
         guard screen != screenGranted || accessibility != accessibilityGranted else { return }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
             screenGranted = screen
@@ -279,22 +329,37 @@ struct PermissionOnboardingView: View {
         if screen && !directCaptureGranted && !captureChecking { requestDirectCapture() }
     }
     private func requestCaptionAudio(automatic: Bool = false) {
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
         guard CGPreflightScreenCaptureAccess() else { accessMessage = "请先授权屏幕录制，再检查系统音频。"; return }
-        guard !audioChecking else { return }
+        guard let generation = CaptionAudioPermissionProbe.state.begin() else {
+            accessMessage = "系统音频检查仍在等待系统响应，请稍候。"; return
+        }
         let previous = CaptionAudioPermissionProbe.previouslyVerified
-        audioChecking = true; CaptionAudioPermissionProbe.verifiedThisLaunch = false
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.permissions, .start, .started, operationID: generation, stage:.permissionAudio)
+        audioChecking = true; audioGranted = false; CaptionAudioPermissionProbe.verifiedThisLaunch = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            guard audioChecking, CaptionAudioPermissionProbe.state.isCurrent(generation) else { return }
+            LocalDiagnostics.shared.record(.permissions,.waiting,.started,duration:8,operationID:generation,stage:.permissionAudio)
+            audioStatus = "系统音频检查等待较久，请检查是否有系统提示。"
+            accessMessage = audioStatus
+        }
         Task { @MainActor in
             let result: CaptionAudioProbeResult
             do { result = try await CaptionAudioPermissionProbe.verify(timeout: automatic ? 1 : 4) }
             catch { result = .failed }
+            guard CaptionAudioPermissionProbe.state.finish(generation) else {
+                LocalDiagnostics.shared.record(.permissions, .complete, .cancelled, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionAudio)
+                NotificationCenter.default.post(name: Notification.Name("MORIQPermissionProbeFinished"), object: PermissionProbeKind.audio.rawValue); return
+            }
             let decision = CaptionAudioAuthorizationPolicy.decide(previouslyVerified: previous, screenAllowed: CGPreflightScreenCaptureAccess(), result: result)
             switch decision {
             case .confirmed:
                 CaptionAudioPermissionProbe.previouslyVerified = true; CaptionAudioPermissionProbe.verifiedThisLaunch = true; audioGranted = true
                 audioStatus = "本次已确认系统音频。"; accessMessage = "系统音频检查完成。"
             case .previouslyVerifiedSilent:
-                CaptionAudioPermissionProbe.verifiedThisLaunch = true; audioGranted = true
-                audioStatus = "上次通过，本次静音待确认。"; accessMessage = "未检测到声音；可继续，使用字幕时会再次检查。"
+                CaptionAudioPermissionProbe.verifiedThisLaunch = false; audioGranted = false
+                audioStatus = "暂无声音，无法确认。"; accessMessage = "请播放声音后再次检查，系统音频不会保存。"
             case .needsAudio:
                 CaptionAudioPermissionProbe.verifiedThisLaunch = false; audioGranted = false
                 audioStatus = "暂无声音，无法确认。"; accessMessage = "请播放声音后再次检查，系统音频不会保存。"
@@ -302,45 +367,99 @@ struct PermissionOnboardingView: View {
                 CaptionAudioPermissionProbe.previouslyVerified = false; CaptionAudioPermissionProbe.verifiedThisLaunch = false; audioGranted = false
                 audioStatus = "无法启动系统音频。"; accessMessage = "请检查系统音频及屏幕录制权限后重试。"
             }
+            LocalDiagnostics.shared.record(.permissions, .complete, audioGranted ? .success : .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionAudio)
             audioChecking = false
         }
     }
+    private func startFolderTimeout(_ generation: UUID) {
+        folderCheckGeneration = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            guard foldersChecking, folderCheckGeneration == generation, FolderAccessProbe.state.isCurrent(generation) else { return }
+            LocalDiagnostics.shared.record(.permissions,.waiting,.started,duration:8,operationID:generation,stage:.permissionFolder)
+            accessMessage = "文件夹检查等待较久，请检查是否有系统提示。"
+        }
+    }
     private func recheckFolders() {
-        foldersChecking = true
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
+        guard let generation = FolderAccessProbe.state.begin() else { return }
+        let diagnosticStart=ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.permissions,.start,.started,operationID:generation,stage:.permissionFolder)
+        foldersChecking = true; foldersGranted = false
         FolderAccessProbe.verifiedThisLaunch = false
+        startFolderTimeout(generation)
         Task { @MainActor in
             let ok = await Task.detached(priority: .userInitiated) { FolderAccessProbe.standardFolders() }.value
+            guard FolderAccessProbe.state.finish(generation) else {
+                LocalDiagnostics.shared.record(.permissions,.complete,.cancelled,duration:ProcessInfo.processInfo.systemUptime-diagnosticStart,operationID:generation,stage:.permissionFolder)
+                NotificationCenter.default.post(name: Notification.Name("MORIQPermissionProbeFinished"), object: PermissionProbeKind.folders.rawValue); return
+            }
+            LocalDiagnostics.shared.record(.permissions,.complete,ok ? .success : .failure,duration:ProcessInfo.processInfo.systemUptime-diagnosticStart,operationID:generation,stage:.permissionFolder)
             foldersChecking = false
             foldersGranted = ok; FolderAccessProbe.verifiedThisLaunch = ok
-            UserDefaults.standard.set(ok, forKey: "moriq.foldersVerified")
+            foldersPreviouslyVerified = ok
             if !ok {
                 accessMessage = "文件夹访问已变化，请在系统设置中检查后重新授权。"
             } else if accessMessage == "文件夹访问已变化，请在系统设置中检查后重新授权。" { accessMessage = "" }
         }
     }
     private func requestFolders() {
-        guard !foldersChecking else { return }
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
+        guard let generation = FolderAccessProbe.state.begin() else {
+            accessMessage = "文件夹检查仍在等待系统响应，请稍候或重新打开 MORIQ。"; return
+        }
+        foldersGranted = false; FolderAccessProbe.verifiedThisLaunch = false
         foldersRequested = true
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.permissions, .start, .started, operationID: generation, stage:.permissionFolder)
         foldersChecking = true; accessMessage = "请依次在系统提示中允许访问。"
+        startFolderTimeout(generation)
         Task { @MainActor in
             let ok = await Task.detached(priority: .userInitiated) { FolderAccessProbe.standardFolders() }.value
+            guard FolderAccessProbe.state.finish(generation) else {
+                LocalDiagnostics.shared.record(.permissions, .complete, .cancelled, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionFolder)
+                NotificationCenter.default.post(name: Notification.Name("MORIQPermissionProbeFinished"), object: PermissionProbeKind.folders.rawValue); return
+            }
+            LocalDiagnostics.shared.record(.permissions, .complete, ok ? .success : .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionFolder)
             foldersChecking = false; foldersGranted = ok
             FolderAccessProbe.verifiedThisLaunch = ok
-            UserDefaults.standard.set(ok, forKey: "moriq.foldersVerified")
+            foldersPreviouslyVerified = ok
             accessMessage = ok ? "文件夹访问已就绪。" : "请在系统设置的“隐私与安全性 → 文件与文件夹”中允许 MORIQ，然后重试。"
         }
     }
     private func requestDirectCapture() {
-        guard screenGranted, !captureChecking else { accessMessage = "请先完成屏幕录制授权。"; return }
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
+        guard screenGranted else { accessMessage = "请先完成屏幕录制授权。"; return }
+        guard let generation = DirectScreenAccessProbe.state.begin() else {
+            accessMessage = "屏幕读取检查仍在等待系统响应，请稍候或重新打开 MORIQ。"; return
+        }
+        directCaptureGranted = false; DirectScreenAccessProbe.verifiedThisLaunch = false
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        LocalDiagnostics.shared.record(.permissions, .start, .started, operationID: generation, stage:.permissionScreen)
         captureChecking = true; accessMessage = "正在检查直接读取权限，若系统询问请确认。"
+        captureCheckGeneration = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            guard captureChecking, captureCheckGeneration == generation, DirectScreenAccessProbe.state.isCurrent(generation) else { return }
+            LocalDiagnostics.shared.record(.permissions,.waiting,.started,duration:8,operationID:generation,stage:.permissionScreen)
+            accessMessage = "屏幕读取检查等待较久，请检查是否有系统提示。"
+        }
         Task { @MainActor in
-            defer { captureChecking = false }
+            defer {
+                if DirectScreenAccessProbe.state.finish(generation) {
+                    LocalDiagnostics.shared.record(.permissions, .complete, directCaptureGranted ? .success : .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionScreen)
+                    captureChecking = false
+                } else {
+                    LocalDiagnostics.shared.record(.permissions, .complete, .cancelled, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: generation, stage:.permissionScreen)
+                    NotificationCenter.default.post(name: Notification.Name("MORIQPermissionProbeFinished"), object: PermissionProbeKind.screen.rawValue)
+                }
+            }
             do {
                 try await DirectScreenAccessProbe.verify()
+                guard DirectScreenAccessProbe.state.isCurrent(generation) else { return }
                 guard CGPreflightScreenCaptureAccess() else { throw NSError(domain: "MORIQDirectScreenProbe", code: 3) }
                 directCaptureGranted = true; DirectScreenAccessProbe.verifiedThisLaunch = true
                 UserDefaults.standard.set(true, forKey: DirectScreenAccessProbe.verifiedKey); accessMessage = "屏幕读取检查已完成；系统可能定期再次提醒。"
             } catch {
+                guard DirectScreenAccessProbe.state.isCurrent(generation) else { return }
                 directCaptureGranted = false; DirectScreenAccessProbe.verifiedThisLaunch = false
                 UserDefaults.standard.set(false, forKey: DirectScreenAccessProbe.verifiedKey)
                 accessMessage = "尚未确认直接读取权限，请检查系统设置后重试。"
@@ -348,11 +467,15 @@ struct PermissionOnboardingView: View {
         }
     }
     private func requestScreen() {
+        LocalDiagnostics.shared.record(.permissions, .check, .started, stage:.permissionScreen)
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
         PermissionRelaunch.shared.arm(for: "screen")
         if screenRequested { openSettings("Privacy_ScreenCapture") }
         else { screenRequested = true; screenGranted = CGRequestScreenCaptureAccess() }
     }
     private func requestAccessibility() {
+        LocalDiagnostics.shared.record(.permissions, .check, .started, stage:.permissionAccessibility)
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
         PermissionRelaunch.shared.arm(for: "accessibility")
         if accessibilityRequested { openSettings("Privacy_Accessibility") }
         else {
@@ -361,6 +484,7 @@ struct PermissionOnboardingView: View {
         }
     }
     private func openSettings(_ anchor: String) {
+        guard RuntimeEnvironment.permitsCurrent(.systemPermissions) else { accessMessage = "内部测试已禁用系统权限。"; return }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") { NSWorkspace.shared.open(url) }
     }
     private func typeIntroduction() async {
@@ -448,5 +572,29 @@ private struct TypeCaret: View {
             .opacity(visible ? 1 : 0).padding(.leading, 3)
             .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 0.5).repeatForever()) { visible = false } } }
             .accessibilityHidden(true)
+    }
+}
+
+// Inline recovery guidance. Authorization remains determined by system APIs.
+struct PermissionRecognitionHelp: View {
+    @Binding var expanded: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() } } label: {
+                HStack(spacing: 4) {
+                    Text("已开启但未识别？")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .semibold))
+                }.font(.system(size: 11, weight: .medium)).foregroundStyle(Color.accentColor)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("permissionRecognitionHelp")
+            if expanded {
+                Text("可能存在旧版本权限记录。打开系统设置 → 隐私与安全性 → 对应权限；确认是旧版本的 MORIQ 条目后，选中并点“−”移除，再点“+”选择当前正在运行的 MORIQ 应用（通常位于“应用程序”），开启后重新打开 MORIQ。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("permissionRecognitionInstructions")
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -329,7 +329,7 @@ private final class ClipboardCaptureBuffer: @unchecked Sendable {
     }
     func toggleFavorite(_ item: ClipboardEntry) {
         if favorites.contains(item.id) { favorites.remove(item.id) } else { favorites.insert(item.id) }
-        saveFavorites()
+        saveFavorites(); LocalDiagnostics.shared.record(.clipboard, .favorite, .success)
     }
     private func saveFavorites() { if persistent { defaults.set(favorites.map(\.uuidString), forKey: favoritesKey) } }
     private func persist() {
@@ -494,6 +494,7 @@ private final class ClipboardCaptureBuffer: @unchecked Sendable {
         }
     }
     @discardableResult func copy(_ item: ClipboardEntry, plain: Bool = false) -> Bool {
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
         let output: [NSPasteboardItem] = item.items.compactMap { values in
             let pasteboardItem = NSPasteboardItem()
             let filtered = plain ? values.filter { $0.key == NSPasteboard.PasteboardType.string.rawValue } :
@@ -502,11 +503,12 @@ private final class ClipboardCaptureBuffer: @unchecked Sendable {
             for (type, data) in filtered { pasteboardItem.setData(data, forType: NSPasteboard.PasteboardType(type)) }
             return pasteboardItem
         }
-        guard !output.isEmpty else { copyError = "这条记录没有可复制的内容。"; return false }
+        guard !output.isEmpty else { LocalDiagnostics.shared.record(.clipboard, .copy, .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart); copyError = "这条记录没有可复制的内容。"; return false }
         board.clearContents()
         let success = board.writeObjects(output)
         lastCount = board.changeCount
         copyError = success ? nil : "复制失败，请重试。"
+        LocalDiagnostics.shared.record(.clipboard, .copy, success ? .success : .failure, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart)
         return success
     }
 }
@@ -576,6 +578,11 @@ struct ClipboardView: View {
             }.buttonStyle(.plain).font(.system(size: 12, weight: .medium))
             TextField("搜索剪贴板", text: $search).textFieldStyle(.roundedBorder).focused($focused)
                 .onChange(of: search) { _, _ in selected = 0 }
+                .task(id: search) {
+                    guard !search.isEmpty else { return }
+                    do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+                    LocalDiagnostics.shared.record(.clipboard,.check,.success)
+                }
                 .onSubmit { if filtered.indices.contains(selected) { choose(filtered[selected], false) } }
                 .onKeyPress(.downArrow) { selected = min(selected + 1, max(0, filtered.count - 1)); return .handled }
                 .onKeyPress(.upArrow) { selected = max(0, selected - 1); return .handled }
