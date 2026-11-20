@@ -23,8 +23,8 @@ class ControlledDeepSeekProvider:
   if not isinstance(source,str) or not source.strip() or len(source)>4000 or not isinstance(context,str) or len(context)>512 or target not in ('zh-Hans','en-US'):raise DeepLExperimentError('invalid_response')
   language={'zh-Hans':'简体中文','en-US':'英文'}[target]
   body=json.dumps({'model':'deepseek-flash','thinking':{'type':'disabled'},'stream':False,'max_tokens':500,
-   'messages':[{'role':'system','content':f'准确翻译为{language}，保留数字、单位和上下文关系，只输出译文。'},
-               {'role':'user','content':('前文：'+context+'\n' if context else '')+'待翻译：'+source}]},ensure_ascii=False).encode()
+   'messages':[{'role':'system','content':f'将输入 JSON 中的 source_text 准确翻译为{language}。context_for_reference 只用于理解上下文，不要翻译或复述它。保留数字和单位，只输出 source_text 的译文，不要输出标签、解释或 JSON。'},
+               {'role':'user','content':json.dumps({'source_text':source,'context_for_reference':context},ensure_ascii=False)}]},ensure_ascii=False).encode()
   cancelled=threading.Event()
   def send():
    with _SLOTS:

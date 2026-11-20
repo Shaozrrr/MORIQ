@@ -38,6 +38,12 @@ def _century_numbers(text):
 
 def guard_rule(source,candidate,context=''):
     s=source.lower();c=candidate.lower()
+    # A provider may echo instruction labels or structured fields instead of
+    # translating the current unit. Reject the entire candidate rather than
+    # stripping a prefix and accidentally presenting repeated context.
+    for marker in ('前文：','前文:', '待翻译：','待翻译:', 'context_for_reference', 'source_text'):
+        if marker.lower() in c and marker.lower() not in s:
+            return 'instruction_echo'
     f=('fahrenheit' in s or '°f' in s)
     source_numbers=set(_NUM.findall(s));target_numbers=set(_NUM.findall(c))|_century_numbers(c)
     if f and ('摄氏' in c or '°c' in c):
