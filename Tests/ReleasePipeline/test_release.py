@@ -59,7 +59,9 @@ class ReleaseTests(unittest.TestCase):
    def fake(args, capture=False):
     calls.append([str(x) for x in args]); cmd=str(args[0])
     if cmd=='ditto': shutil.copytree(args[1],args[2])
-    if cmd=='hdiutil': Path(args[-1]).write_bytes(b'fixture')
+    if '-m' in args and 'dmgbuild' in args: Path(args[-1]).write_bytes(b'fixture')
+    if cmd=='hdiutil' and 'attach' in args:
+     (Path(args[args.index('-mountpoint')+1])/'Applications').symlink_to('/Applications')
     return ''
    with patch.object(m,'run',fake), patch.object(m,'identity_check'), patch.object(m,'assert_universal'), patch.object(m,'require_universal_binary'), patch.object(m,'require_system_dylibs'), patch.object(m,'require_speech_resources'), patch.object(m,'require_developer_signature'):
     m.sign(str(source),str(root/'signed'),IDENTITY,'1.2.0','42')
@@ -68,6 +70,9 @@ class ReleaseTests(unittest.TestCase):
     self.assertEqual((info['CFBundleShortVersionString'],info['CFBundleVersion']),('1.2.0','42'))
     m.package(str(signed),str(root/'dmg'),IDENTITY)
    self.assertTrue((root/'dmg/MORIQ.dmg').exists())
+   mounted_verify=next(i for i,c in enumerate(calls) if c[0]=='codesign' and '--verify' in c and c[-1].endswith('/volume/MORIQ.app'))
+   image_sign=next(i for i,c in enumerate(calls) if c[0]=='codesign' and '--sign' in c and c[-1].endswith('/dmg/MORIQ.dmg'))
+   self.assertLess(mounted_verify,image_sign)
    self.assertFalse(any('notarytool' in ' '.join(c) or 'submit' in c or 'upload' in c for c in calls))
    signs=[c for c in calls if c[0]=='codesign' and '--sign' in c]
    self.assertTrue(signs)

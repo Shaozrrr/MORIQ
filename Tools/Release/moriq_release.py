@@ -225,11 +225,25 @@ def package(app_path, out, identity):
     run(['codesign', '--verify', '--deep', '--strict', app])
     output = safe_new_dir(out)
     dmg = output / 'MORIQ.dmg'
-    with tempfile.TemporaryDirectory(prefix='moriq-dmg-', dir=output) as tmp:
-        staging = Path(tmp)
-        run(['ditto', app, staging / 'MORIQ.app'])
-        os.symlink('/Applications', staging / 'Applications')
-        run(['hdiutil', 'create', '-fs', 'HFS+', '-format', 'UDZO', '-volname', 'MORIQ', '-srcfolder', staging, dmg])
+    settings = ROOT / 'Tools/Release/dmg_settings.py'
+    assets = ROOT / 'Tools/Release/assets'
+    run([sys.executable, '-m', 'dmgbuild', '-s', settings,
+         '-D', f'app={app}', '-D', f'assets={assets}', 'MORIQ', dmg])
+    # dmgbuild may not propagate a failed ditto copy. Inspect the image itself
+    # before signing; a valid source app does not prove the mounted copy is complete.
+    with tempfile.TemporaryDirectory(prefix='moriq-verify-', dir=output) as tmp:
+        mount = Path(tmp) / 'volume'
+        mount.mkdir()
+        run(['hdiutil', 'attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg])
+        try:
+            mounted_app = mount / 'MORIQ.app'
+            assert_universal(mounted_app)
+            require_developer_signature(mounted_app)
+            run(['codesign', '--verify', '--deep', '--strict', mounted_app])
+            if not (mount / 'Applications').is_symlink() or os.readlink(mount / 'Applications') != '/Applications':
+                raise ReleaseError('安装镜像缺少正确的应用程序快捷入口。')
+        finally:
+            run(['hdiutil', 'detach', mount])
     run(['codesign', '--sign', identity, '--timestamp', dmg])
     run(['codesign', '--verify', '--strict', dmg])
     print('已生成本地 DMG:', dmg)

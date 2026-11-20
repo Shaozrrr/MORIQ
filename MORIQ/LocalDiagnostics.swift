@@ -123,6 +123,11 @@ final class LocalDiagnostics: @unchecked Sendable {
     #endif
     private var maintenance: DispatchSourceTimer?
     init(defaults: UserDefaults = .standard, file: URL? = nil, maxBytes: Int = 524_288, retentionDays: Int = 7) {
+        #if !DEBUG
+        // The release UI no longer exposes diagnostics controls. Stop any
+        // previously enabled local recording without deleting existing data.
+        defaults.set(false, forKey: Self.enabledKey)
+        #endif
         self.defaults=defaults
         self.file=file ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("MORIQ/diagnostics/events.jsonl")
         self.maxBytes=maxBytes; self.retentionDays=retentionDays
