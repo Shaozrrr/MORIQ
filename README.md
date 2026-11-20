@@ -45,7 +45,8 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 MORIQ 面向 **macOS 15 或更高版本**。
 
-[下载 Apple 芯片精简内测版 · 约 649 MB](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-arm64-beta/MORIQ-arm64.dmg)  
+[下载 Apple 芯片精简内测版 · 约 649 MB](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-arm64-beta/MORIQ-arm64.dmg)
+
 [下载通用内测版 · 约 1.07 GB](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-beta2/MORIQ.dmg)（支持 Apple 芯片与 Intel 芯片）
 
 精简版已通过 Apple 公证，应用内转换和安装体验尚待完整验收。打开下载的 DMG，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
