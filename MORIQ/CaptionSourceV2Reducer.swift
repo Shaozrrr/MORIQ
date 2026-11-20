@@ -100,6 +100,72 @@ enum CaptionSourceReviewPolicy {
     }
 }
 
+/// Keeps local translations attached to the verified source unit that produced
+/// them. The caller must enqueue only markers accepted by SourceV2Verifier.
+struct CaptionLocalTranslationQueue {
+    struct Work: Equatable {
+        let session: UUID, epoch: UUID, unit: UUID
+        let revision: UInt64
+        let sourceHash: String, target: String, source: String
+    }
+    private(set) var pending: [Work] = []
+    private var expected: [UUID: Work] = [:]
+    private var order: [UUID] = []
+    private var results: [UUID: String] = [:]
+    private(set) var hasFailure = false
+    private let session: UUID, epoch: UUID, target: String
+
+    init(session: UUID, epoch: UUID, target: String) {
+        self.session = session; self.epoch = epoch; self.target = target
+    }
+
+    @discardableResult mutating func enqueue(_ marker: SourceMarker, confirmed: String) -> Bool {
+        guard !hasFailure, order.count < 1024, marker.session == session, marker.epoch == epoch,
+              marker.revision > 0, expected[marker.unit] == nil else { return false }
+        let bytes = Array(confirmed.utf8)
+        guard marker.start_byte >= 0, marker.end_byte > marker.start_byte,
+              marker.end_byte <= bytes.count,
+              let source = String(bytes: bytes[marker.start_byte..<marker.end_byte], encoding: .utf8), source.utf8.count <= 4000,
+              SHA256.hash(data: Data(source.utf8)).map({ String(format: "%02x", $0) }).joined() == marker.source_sha256 else { return false }
+        let work = Work(session: session, epoch: epoch, unit: marker.unit, revision: marker.revision,
+                        sourceHash: marker.source_sha256, target: target, source: source)
+        expected[marker.unit] = work; order.append(marker.unit); pending.append(work)
+        return true
+    }
+
+    @discardableResult mutating func complete(_ work: Work, text: String) -> Bool {
+        guard !hasFailure, expected[work.unit] == work, results[work.unit] == nil,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let value: String
+        if work.target == "zh-Hans" {
+            guard let simplified = text.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) else { return false }
+            value = simplified
+        } else { value = text }
+        results[work.unit] = value
+        pending.removeAll { $0 == work }
+        return true
+    }
+
+    /// The caller can retain the existing provider preview when a local
+    /// translation fails; do not silently claim a partial result is complete.
+    @discardableResult mutating func fail(_ work: Work) -> Bool {
+        guard expected[work.unit] == work, results[work.unit] == nil else { return false }
+        hasFailure = true; pending.removeAll()
+        return true
+    }
+
+    /// Only a contiguous prefix is publishable: later results must never jump
+    /// ahead of an earlier unit that is still translating.
+    var visible: String {
+        var parts: [String] = []
+        for unit in order {
+            guard let text = results[unit] else { break }
+            parts.append(text)
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
 enum CaptionPunctProductPolicy {
     static let preferenceKey = "moriq.caption.punct.enabled"
     static func enabled(available: Any?, optedIn: Bool, automatic: Bool) -> Bool {
