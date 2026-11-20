@@ -83,6 +83,8 @@ class IdentityWindowLimit:
       if recovery:key=device_hash
     else:
      known=key is not None and db.execute('SELECT 1 FROM device_sessions_v2 WHERE device_hash=? AND revoked=0 AND expires_at>?',(key,now)).fetchone() is not None
+     if not known and key is not None and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anonymous_accounts_v1'").fetchone():
+      known=db.execute('SELECT 1 FROM device_sessions_v2 d JOIN anonymous_accounts_v1 a ON a.device_hash=d.device_hash WHERE d.device_hash=? AND d.revoked=0',(key,)).fetchone() is not None
     category='recovery' if recovery else ('known' if known else 'unknown')
     entries=[(category,'*',self.limits[0] if known or recovery else self.limits[1])]
     if known or recovery:entries.append((category+':credential',key,self.limits[2]))
