@@ -29,9 +29,18 @@ class AnonymousActivation:
     prior = db.execute('SELECT d.account_id,d.session_hash,d.expires_at,d.revoked FROM device_sessions_v2 d JOIN anonymous_accounts_v1 a ON a.device_hash=d.device_hash WHERE d.device_hash=?', (dh,)).fetchone()
     if prior:
      account, session_hash, expires, revoked = prior
-     active = db.execute('SELECT 1 FROM sessions WHERE token_hash=? AND account_id=? AND revoked=0 AND expires_at>?', (ah, account, now)).fetchone()
-     db.execute('ROLLBACK')
-     return not revoked and expires > now and session_hash == ah and active is not None
+     session = db.execute('SELECT expires_at,revoked FROM sessions WHERE token_hash=? AND account_id=?', (ah, account)).fetchone()
+     if revoked or session_hash != ah or not session or session[1]:
+      db.execute('ROLLBACK'); return False
+     if expires <= now or session[0] <= now:
+      # The initial response may have been lost before a long offline period.
+      # Only the same device and access secrets can recover this session;
+      # a revoked session remains revoked, including during rollback.
+      device_expiry=max(expires,now+device_ttl)
+      db.execute('UPDATE device_sessions_v2 SET expires_at=? WHERE device_hash=?',(device_expiry,dh))
+      db.execute('UPDATE sessions SET expires_at=? WHERE token_hash=?',(min(now+session_ttl,device_expiry),ah))
+      db.execute('COMMIT'); return True
+     db.execute('ROLLBACK'); return True
     if db.execute('SELECT 1 FROM device_sessions_v2 WHERE device_hash IN (?,?)', (dh,ah)).fetchone() or db.execute('SELECT 1 FROM sessions WHERE token_hash IN (?,?)', (dh,ah)).fetchone():
      db.execute('ROLLBACK'); return False
     account = 'anon_' + secrets.token_hex(16)
