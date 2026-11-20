@@ -124,8 +124,9 @@ def validate_ai_endpoint(value):
 def validate_activation_endpoint(value):
     return validate_endpoint(value, 'https', '/v1/devices/renew')
 
-def build(out, speech_endpoint=None, caption_punct_available=False, ai_endpoint=None, full_featured=False, activation_endpoint=None, shared_leases=False, anonymous_device=False):
-    if any(type(value) is not bool for value in (caption_punct_available, full_featured, shared_leases, anonymous_device)): raise ReleaseError('构建能力标记无效。')
+def build(out, speech_endpoint=None, caption_punct_available=False, ai_endpoint=None, full_featured=False, activation_endpoint=None, shared_leases=False, anonymous_device=False, native_only=False):
+    if any(type(value) is not bool for value in (caption_punct_available, full_featured, shared_leases, anonymous_device, native_only)): raise ReleaseError('构建能力标记无效。')
+    if native_only and caption_punct_available: raise ReleaseError('原生字幕模式不能启用依赖额外译文的增强字幕。')
     if anonymous_device and not shared_leases: raise ReleaseError('免注册接入需要共享会话和完整在线服务配置。')
     if shared_leases and not all((speech_endpoint,ai_endpoint,activation_endpoint)): raise ReleaseError('共享会话需要字幕、助手和设备激活服务地址。')
     if full_featured and (not shared_leases or not all((speech_endpoint, ai_endpoint, activation_endpoint))): raise ReleaseError('好友版完整功能构建需要字幕、助手、设备激活服务及共享会话。')
@@ -152,7 +153,8 @@ def build(out, speech_endpoint=None, caption_punct_available=False, ai_endpoint=
         if speech_endpoint is not None:
             metadata['MORIQManagedSpeechEndpoint'] = speech_endpoint
             metadata['MORIQNativeCaptionMode'] = 'batch-v1'
-            metadata['MORIQCaptionAutomaticMode'] = 'trusted-v1'
+            if not native_only:
+                metadata['MORIQCaptionAutomaticMode'] = 'trusted-v1'
             metadata['MORIQCaptionPunctAvailable'] = caption_punct_available
         if ai_endpoint is not None:
             metadata['MORIQManagedAIEndpoint'] = ai_endpoint
@@ -237,13 +239,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('preflight'); p.add_argument('--identity', required=True)
-    p = sub.add_parser('build'); p.add_argument('--out', required=True); p.add_argument('--speech-endpoint', help='已核验的远端字幕 WSS 地址；启用正式字幕和自动译文'); p.add_argument('--caption-punct-available', action='store_true', help='在设置中提供增强字幕开关（仍默认关闭）'); p.add_argument('--ai-endpoint', help='已核验的远端 HTTPS 助手服务地址'); p.add_argument('--activation-endpoint', help='已核验的 HTTPS 设备续期服务地址'); p.add_argument('--shared-leases', action='store_true', help='显式启用经过联测的设备共享会话'); p.add_argument('--full-featured', action='store_true', help='要求好友版字幕、助手、设备激活及共享会话全部配置'); p.add_argument('--anonymous-device', action='store_true', help='启用免注册接入，须先验证服务端和防刷')
+    p = sub.add_parser('build'); p.add_argument('--out', required=True); p.add_argument('--speech-endpoint', help='已核验的远端字幕 WSS 地址'); p.add_argument('--caption-punct-available', action='store_true', help='在设置中提供增强字幕开关（仍默认关闭）'); p.add_argument('--ai-endpoint', help='已核验的远端 HTTPS 助手服务地址'); p.add_argument('--activation-endpoint', help='已核验的 HTTPS 设备续期服务地址'); p.add_argument('--shared-leases', action='store_true', help='显式启用经过联测的设备共享会话'); p.add_argument('--full-featured', action='store_true', help='要求好友版字幕、助手、设备激活及共享会话全部配置'); p.add_argument('--anonymous-device', action='store_true', help='启用免注册接入，须先验证服务端和防刷'); p.add_argument('--native-only', action='store_true', help='字幕使用原生实时翻译，不启用额外自动译文')
     p = sub.add_parser('sign'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True); p.add_argument('--version', required=True); p.add_argument('--build-number', required=True)
     p = sub.add_parser('package'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True)
     a = parser.parse_args(argv)
     try:
         if a.command == 'preflight': identity_check(a.identity); print('找到有效证书；这不代表可公证或可发行。')
-        elif a.command == 'build': build(a.out, a.speech_endpoint, a.caption_punct_available, a.ai_endpoint, a.full_featured, a.activation_endpoint, a.shared_leases, a.anonymous_device)
+        elif a.command == 'build': build(a.out, a.speech_endpoint, a.caption_punct_available, a.ai_endpoint, a.full_featured, a.activation_endpoint, a.shared_leases, a.anonymous_device, a.native_only)
         elif a.command == 'sign': sign(a.app, a.out, a.identity, a.version, a.build_number)
         else: package(a.app, a.out, a.identity)
     except (ReleaseError, FileNotFoundError, PermissionError, plistlib.InvalidFileException, OSError) as e:
