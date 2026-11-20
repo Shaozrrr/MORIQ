@@ -15,9 +15,23 @@ import CryptoKit
         }
         var queue = CaptionLocalTranslationQueue(session: session, epoch: epoch, target: "zh-Hans")
         let a = marker(first, 0, 6), b = marker(second, 7, 12)
-        precondition(queue.enqueue(a, confirmed: source))
+        var verifier = SourceV2Verifier(session: session, epoch: epoch, stream: stream)
+        verifier.commitBatch(1, confirmed: source)
+        for marker in [a, b] {
+            let payload: [String: Any] = [
+                "type": marker.type, "session": session.uuidString, "epoch": epoch.uuidString,
+                "unit": marker.unit.uuidString, "original_stream_id": stream.uuidString,
+                "revision": marker.revision, "batch_seq": marker.batch_seq,
+                "confirmed_through_byte": marker.confirmed_through_byte,
+                "start_byte": marker.start_byte, "end_byte": marker.end_byte,
+                "source_sha256": marker.source_sha256, "boundary_reason": marker.boundary_reason
+            ]
+            verifier.marker(try! JSONSerialization.data(withJSONObject: payload))
+        }
+        precondition(verifier.reviewEnabled && verifier.acceptedMarkers.count == 2)
+        precondition(queue.enqueue(verifier.acceptedMarkers[0], confirmed: source))
         precondition(!queue.enqueue(a, confirmed: source))
-        precondition(queue.enqueue(b, confirmed: source))
+        precondition(queue.enqueue(verifier.acceptedMarkers[1], confirmed: source))
         let firstWork = queue.pending[0], secondWork = queue.pending[1]
         precondition(queue.complete(secondWork, text: "下一句。"))
         precondition(queue.visible.isEmpty)
