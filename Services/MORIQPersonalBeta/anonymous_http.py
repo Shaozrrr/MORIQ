@@ -11,16 +11,19 @@ from activation_http import FairWindowLimit
 from device_invites import digest
 
 
-def register(app, activation, limiter, *, trusted_proxies=()):
+def register(app, activation, limiter, *, trusted_proxies=(), trusted_header='X-Forwarded-For'):
  if not isinstance(limiter, FairWindowLimit) or limiter.store is not activation.store:
   raise ValueError('persistent admission required')
  trusted = {str(ipaddress.ip_address(value)) for value in trusted_proxies}
+ if trusted_header not in ('X-Forwarded-For','X-Real-IP'): raise ValueError('invalid trusted header')
  async def handle(request):
   headers={'Cache-Control':'no-store'}
   try:
    peer=str(ipaddress.ip_address(request.remote))
    if peer in trusted:
-    forwarded=request.headers.get('X-Forwarded-For','')
+    values=request.headers.getall(trusted_header,[])
+    if len(values)!=1: raise ValueError()
+    forwarded=values[0]
     if ',' in forwarded: raise ValueError()
     peer=str(ipaddress.ip_address(forwarded))
    try:
@@ -44,5 +47,5 @@ def register(app, activation, limiter, *, trusted_proxies=()):
  app.router.add_post('/v1/devices/anonymous',handle)
  return app
 
-def make_app(activation, limiter, *, trusted_proxies=()):
- return register(web.Application(client_max_size=2048), activation, limiter, trusted_proxies=trusted_proxies)
+def make_app(activation, limiter, *, trusted_proxies=(), trusted_header='X-Forwarded-For'):
+ return register(web.Application(client_max_size=2048), activation, limiter, trusted_proxies=trusted_proxies, trusted_header=trusted_header)
