@@ -1,0 +1,20 @@
+name: Prepare macOS beta Apple asset
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Verify and copy published installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 'https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-arm64-beta/MORIQ-arm64.dmg' -o "$RUNNER_TEMP/MORIQ-Apple.dmg"
+          echo '1dc1285f60f718f56694d7def887b4f87c6b27203a2137b29b76a38e87ab4616  '"$RUNNER_TEMP/MORIQ-Apple.dmg" | sha256sum -c -
+          curl --fail --silent --show-error -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Content-Type: application/octet-stream' --upload-file "$RUNNER_TEMP/MORIQ-Apple.dmg" 'https://uploads.github.com/repos/Shaozrrr/MORIQ/releases/453453310/assets?name=MORIQ-Apple.dmg' > "$RUNNER_TEMP/upload.json"
+          python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); assert a["state"] == "uploaded" and a["size"] == 648872627; print("Verified asset uploaded", a["name"], a["size"])' "$RUNNER_TEMP/upload.json"
