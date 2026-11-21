@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a signed ARM-only candidate from an existing signed universal app.
+"""Create a signed architecture-specific candidate from a universal app.
 
 This tool does not notarize, publish, or install the result.
 """
@@ -14,17 +14,9 @@ import sys
 
 from moriq_release import ReleaseError, identity_check, run, safe_new_dir
 
-DROP = (
-    'OfficeSuite/LibreOffice-x86_64.app',
-    'OfficeEngine/jre-x86_64',
-    'Pandoc/pandoc-x86_64',
-)
-KEEP = (
-    'OfficeSuite/LibreOffice-arm64.app/Contents/MacOS/soffice',
-    'OfficeEngine/jre-arm64/bin/java',
+COMMON = (
     'OfficeEngine/converter.jar',
     'OfficeEngine/sheet-view-preserver.jar',
-    'Pandoc/pandoc-arm64',
     'ffmpeg',
     'SpeechEngine/moriq-speech',
     'SpeechEngine/ggml-base.bin',
@@ -47,7 +39,12 @@ def tree_manifest(root):
                 result[relative] = ('file', digest.hexdigest())
     return result
 
-def prepare(source, out, identity, expected_build):
+def prepare(source, out, identity, expected_build, arch='arm64'):
+    if arch not in ('arm64', 'x86_64'):
+        raise ReleaseError('不支持的架构。')
+    other = 'x86_64' if arch == 'arm64' else 'arm64'
+    drop = (f'OfficeSuite/LibreOffice-{other}.app', f'OfficeEngine/jre-{other}', f'Pandoc/pandoc-{other}')
+    keep = (f'OfficeSuite/LibreOffice-{arch}.app/Contents/MacOS/soffice', f'OfficeEngine/jre-{arch}/bin/java', f'Pandoc/pandoc-{arch}') + COMMON
     identity_check(identity)
     src = Path(source).expanduser().resolve(strict=True)
     if src.name != 'MORIQ.app' or not src.is_dir():
@@ -63,7 +60,7 @@ def prepare(source, out, identity, expected_build):
     if str(info.get('CFBundleVersion')) != expected_build:
         raise ReleaseError('输入构建号与预期不一致。')
     res = src/'Contents/Resources'
-    for name in DROP + KEEP:
+    for name in drop + keep:
         item = res/name
         if not item.exists() or item.is_symlink():
             raise ReleaseError(f'依赖缺失或为符号链接：{name}')
@@ -76,35 +73,35 @@ def prepare(source, out, identity, expected_build):
     entitlements = plistlib.loads(p.stdout)
     output = safe_new_dir(out)
     dest = output/'MORIQ.app'; dest.mkdir()
-    exclusions = [f'--exclude=/Contents/Resources/{name}' for name in DROP]
+    exclusions = [f'--exclude=/Contents/Resources/{name}' for name in drop]
     run(['rsync', '-aE', *exclusions, str(src)+'/', str(dest)+'/'])
-    main = dest/'Contents/MacOS/MORIQ'; thin = output/'moriq-arm64'
-    run(['lipo', '-thin', 'arm64', main, '-output', thin])
+    main = dest/'Contents/MacOS/MORIQ'; thin = output/f'moriq-{arch}'
+    run(['lipo', '-thin', arch, main, '-output', thin])
     thin.chmod(0o755); thin.replace(main)
     ent = output/'entitlements.plist'
     ent.write_bytes(plistlib.dumps(entitlements))
     run(['codesign', '--force', '--sign', identity, '--options', 'runtime',
          '--timestamp', '--entitlements', ent, dest])
     run(['codesign', '--verify', '--deep', '--strict', dest])
-    if set(run(['lipo', '-archs', main], capture=True).split()) != {'arm64'}:
-        raise ReleaseError('输出主程序不是单一 ARM 架构。')
+    if set(run(['lipo', '-archs', main], capture=True).split()) != {arch}:
+        raise ReleaseError('输出主程序架构不正确。')
     p = subprocess.run(['codesign', '-d', '--entitlements', ':-', str(dest)],
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if plistlib.loads(p.stdout) != entitlements:
         raise ReleaseError('输出签名权限与输入不一致。')
-    for name in KEEP:
+    for name in keep:
         if not (dest/'Contents/Resources'/name).exists():
             raise ReleaseError(f'输出缺少依赖：{name}')
-    for name in ('OfficeSuite/LibreOffice-arm64.app/Contents/MacOS/soffice', 'OfficeEngine/jre-arm64/bin/java', 'Pandoc/pandoc-arm64', 'ffmpeg', 'SpeechEngine/moriq-speech'):
-        run(['lipo', '-verify_arch', 'arm64', dest/'Contents/Resources'/name])
-    run(['codesign', '--verify', '--deep', '--strict', dest/'Contents/Resources/OfficeSuite/LibreOffice-arm64.app'])
-    for name in ('OfficeSuite/LibreOffice-arm64.app', 'OfficeEngine/jre-arm64'):
+    for name in (f'OfficeSuite/LibreOffice-{arch}.app/Contents/MacOS/soffice', f'OfficeEngine/jre-{arch}/bin/java', f'Pandoc/pandoc-{arch}', 'ffmpeg', 'SpeechEngine/moriq-speech'):
+        run(['lipo', '-verify_arch', arch, dest/'Contents/Resources'/name])
+    run(['codesign', '--verify', '--deep', '--strict', dest/f'Contents/Resources/OfficeSuite/LibreOffice-{arch}.app'])
+    for name in (f'OfficeSuite/LibreOffice-{arch}.app', f'OfficeEngine/jre-{arch}'):
         if tree_manifest(res/name) != tree_manifest(dest/'Contents/Resources'/name):
             raise ReleaseError(f'保留的依赖内容与输入不一致：{name}')
-    for name in DROP:
+    for name in drop:
         if (dest/'Contents/Resources'/name).exists():
-            raise ReleaseError(f'输出仍含 Intel 专属依赖：{name}')
-    print('ARM 候选已签名:', dest)
+            raise ReleaseError(f'输出仍含其他架构专属依赖：{name}')
+    print(f'{arch} 候选已签名:', dest)
     print('源主程序 SHA-256:', hashlib.sha256((src/'Contents/MacOS/MORIQ').read_bytes()).hexdigest())
     print('尚未进行应用入口验收、公证或发布。')
 
@@ -112,7 +109,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True); parser.add_argument('--out', required=True)
     parser.add_argument('--identity', required=True); parser.add_argument('--expected-build', required=True)
+    parser.add_argument('--arch', choices=('arm64', 'x86_64'), default='arm64')
     args = parser.parse_args()
-    try: prepare(args.app, args.out, args.identity, args.expected_build)
+    try: prepare(args.app, args.out, args.identity, args.expected_build, args.arch)
     except (ReleaseError, OSError, ValueError, subprocess.CalledProcessError) as e:
         print('失败:', e, file=sys.stderr); sys.exit(1)

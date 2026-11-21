@@ -35,4 +35,4 @@ xcodebuild -project MORIQ.xcodeproj -scheme MORIQ -configuration Debug build
 
 发行镜像使用 `dmgbuild` 设置 Finder 背景、图标位置和磁盘图标。打包前请在独立 Python 环境中安装 `Tools/Release/requirements.txt`；`Tools/Release/moriq_release.py package` 会先校验镜像内应用的签名和完整性，再签署 DMG。发行仍需使用有效的 Developer ID 单独完成公证与附票。
 
-Apple 芯片候选可从已签名的通用应用独立生成：`python3 Tools/Release/prepare_arm_candidate.py --app /绝对路径/MORIQ.app --out /新的输出目录 --identity 'Developer ID Application: 团队名称 (团队ID)' --expected-build 构建号`。工具只复制并排除明确列出的 Intel 专属资源，校验保留引擎和签名，不安装、打包、公证或发布；仍须对实际应用入口和最终安装包进行验收。
+按芯片架构的候选可从已签名的通用应用独立生成（增加 `--arch x86_64` 可选择 Intel，默认是 Apple 芯片）：`python3 Tools/Release/prepare_arm_candidate.py --app /绝对路径/MORIQ.app --out /新的输出目录 --identity 'Developer ID Application: 团队名称 (团队ID)' --expected-build 构建号`。工具只复制并排除明确列出的 Intel 专属资源，校验保留引擎和签名，不安装、打包、公证或发布；仍须对实际应用入口和最终安装包进行验收。
