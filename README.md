@@ -49,7 +49,7 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 MORIQ 面向 **macOS 15 或更高版本**，请选择与你的 Mac 芯片对应的版本：
 
-[下载 Apple 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Intel.dmg)
+[下载 Apple 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Intel.dmg)
 
 打开下载的 DMG，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
 
@@ -62,6 +62,13 @@ MORIQ 面向 **macOS 15 或更高版本**，请选择与你的 Mac 芯片对应�
 MORIQ 仍处于内测阶段。安装包已通过 Apple 公证，支持 Apple 和 Intel 芯片；Intel 真机及其他 Mac 的安装体验尚待验证。
 
 实时字幕的在线识别与翻译需要网络及可用的 MORIQ 服务，实际效果会随语言、网络和声音环境变化。
+
+<details>
+<summary>旧版下载</summary>
+
+[Apple 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Apple.dmg) · [Intel 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Intel.dmg)
+
+</details>
 
 ---
 
