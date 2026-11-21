@@ -52,10 +52,14 @@ import UniformTypeIdentifiers
         guard let annotation = redoAnnotations.popLast() else { return }
         annotations.append(annotation); invalidateResult(); refreshPreview()
     }
+    var currentAnnotatedPreview: CGImage? {
+        previewAnnotations == annotations ? preview : nil
+    }
+
     func render() -> CGImage? {
         // Only reuse a preview of this exact annotation state: exporting an
         // older preview could otherwise omit a newly added redaction.
-        if previewAnnotations == annotations { return preview }
+        if let currentAnnotatedPreview { return currentAnnotatedPreview }
         return renderer(image, annotations)
     }
     private func renderForOperation(_ snapshot: [ScreenshotAnnotation], cached: CGImage?) async -> CGImage? {
@@ -259,7 +263,7 @@ import UniformTypeIdentifiers
         renderTask = Task { @MainActor in
             let result = await Task.detached(priority: .userInitiated) { render(source, current) }.value
             guard !Task.isCancelled, renderGeneration == generation, let result else { return }
-            preview = result; previewAnnotations = current
+            previewAnnotations = current; preview = result
         }
     }
 }
@@ -476,18 +480,20 @@ struct ScreenshotInlinePreview: View {
 #endif
 
 /// Manages the selected image and its controls without opening the main workspace.
-@MainActor final class ScreenshotInlineCoordinator {
+@MainActor final class ScreenshotInlineCoordinator: ObservableObject {
     private var canvasPanel: ScreenshotInlinePanel?
     private var toolbarPanel: ScreenshotInlinePanel?
     private var detailsPanel: ScreenshotInlinePanel?
-    private var session: ScreenshotEditSession?
+    @Published private(set) var session: ScreenshotEditSession?
     private var observation: AnyCancellable?
     private var selection: CGRect = .zero
     private var screen: CGRect = .zero
     private var visible: CGRect = .zero
     private var lastToolbarFrame: CGRect = .zero
     private var lastDetailsFrame: CGRect = .zero
-    private var suspended = false
+    @Published private var suspended = false
+
+    var activeSession: ScreenshotEditSession? { suspended ? nil : session }
 
     @discardableResult func present(image: CGImage, selection: CGRect, screen: CGRect, visible: CGRect, pasteboard: NSPasteboard = .general) -> Bool {
         guard let layout = ScreenshotGeometry.inlineLayout(selection: selection, screen: screen, visible: visible) else { return false }

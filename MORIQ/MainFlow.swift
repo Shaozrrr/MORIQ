@@ -5,7 +5,20 @@ import Speech
 
 @MainActor final class AppFlow: ObservableObject {
     enum Page { case introduction, permissions, settings, demo(Feature), connection, screenshotEditor(CGImage), conversionResults }
-    @Published var page: Page
+    @Published var page: Page {
+        didSet {
+            if case .screenshotEditor(let previous) = oldValue,
+               case .screenshotEditor(let current) = page,
+               previous === current { return }
+            if screenshotPreview != nil { screenshotPreview = nil }
+        }
+    }
+    @Published private(set) var screenshotPreview: CGImage?
+
+    func updateScreenshotPreview(_ preview: CGImage?, source: CGImage) {
+        guard case .screenshotEditor(let current) = page, current === source else { return }
+        screenshotPreview = preview
+    }
     @Published var notice: String?
     @Published var conversionResults: [ConversionRecord] = []
     @Published var autoEnterWhenReady: Bool
@@ -47,7 +60,7 @@ struct MainFlowView: View {
     @AppStorage("moriq.permissionDarkMode") private var dark = false
     private var screenshotPasteboard: NSPasteboard {
         #if DEBUG
-        if CommandLine.arguments.contains("--preview-screenshot-editor") { return NSPasteboard(name: NSPasteboard.Name("local.moriq.test.screenshot-editor")) }
+        if CommandLine.arguments.contains("--preview-screenshot-editor") || CommandLine.arguments.contains("--verify-screenshot-editor-fallback") { return NSPasteboard(name: NSPasteboard.Name("local.moriq.test.screenshot-editor")) }
         #endif
         return .general
     }
@@ -74,7 +87,9 @@ struct MainFlowView: View {
                         Button("‹  返回功能设置") { flow.enterSettings() }.buttonStyle(.borderless)
                         Spacer(); MORIQThemeToggle()
                     }.padding(.horizontal, 24).padding(.top, 20)
-                    ScreenshotEditorContainer(image: image, pasteboard: screenshotPasteboard)
+                    ScreenshotEditorContainer(image: image, pasteboard: screenshotPasteboard) { preview in
+                        flow.updateScreenshotPreview(preview, source: image)
+                    }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             case .connection:
                 VStack(alignment: .leading, spacing: 0) {
@@ -93,9 +108,10 @@ struct MainFlowView: View {
 struct ScreenshotEditorContainer: View {
     let image: CGImage
     let pasteboard: NSPasteboard
+    var onPreviewChange: ((CGImage?) -> Void)? = nil
     var body: some View {
         // Each capture must have its own preview and annotation state.
-        ScreenshotResultView(image: image, pasteboard: pasteboard).id(ObjectIdentifier(image))
+        ScreenshotResultView(image: image, pasteboard: pasteboard, onPreviewChange: onPreviewChange).id(ObjectIdentifier(image))
     }
 }
 #if DEBUG

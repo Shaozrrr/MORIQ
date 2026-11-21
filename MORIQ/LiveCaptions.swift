@@ -888,7 +888,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     }
 }
 
-@MainActor final class LiveCaptionsCoordinator: NSObject, SCStreamDelegate {
+@MainActor final class LiveCaptionsCoordinator: NSObject, SCStreamDelegate, ObservableObject {
     private var stream: SCStream?
     private let sink = LiveCaptionAudioSink()
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -915,7 +915,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
     #if MORIQ_NATIVE_TRANSLATION_PRODUCT
     private var reviewPanelSizeObserver: AnyCancellable?
     #endif
-    private var state: LiveCaptionState?
+    @Published private(set) var state: LiveCaptionState?
     var onStop: (() -> Void)?
 
     /// Called only from a user action.

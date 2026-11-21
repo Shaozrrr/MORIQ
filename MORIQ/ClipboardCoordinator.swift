@@ -513,7 +513,7 @@ private final class ClipboardCaptureBuffer: @unchecked Sendable {
     }
 }
 @MainActor final class ClipboardCoordinator {
-    private let store: ClipboardStore
+    let store: ClipboardStore
     init() { self.store = ClipboardStore() }
     init(store: ClipboardStore) { self.store = store }
     private var panel: ClipboardPanel?
@@ -613,6 +613,12 @@ struct ClipboardView: View {
                             .contextMenu {
                                 Button(store.favorites.contains(item.id) ? "取消收藏" : "收藏") { store.toggleFavorite(item) }
                                 if item.text != nil { Button("复制纯文本") { choose(item, true) } }
+                                if let text = item.text, let cleaned = CleanClipboardLink.clean(text), let data = cleaned.data(using: .utf8) {
+                                    Button("复制去追踪的链接") {
+                                        let entry = ClipboardEntry(id: UUID(), created: Date(), source: "", items: [[NSPasteboard.PasteboardType.string.rawValue: data]])
+                                        choose(entry, true)
+                                    }
+                                }
                                 Button("删除此记录") { store.remove(item) }
                             }
                     } } }

@@ -48,6 +48,7 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
     private var previousApp: NSRunningApplication?
     private var panel: AssistantPanel?
     private let model = AssistantModel()
+    func islandResultView() -> some View { IslandAssistantResult(model: model) }
     private var captureTask: Task<Void, Never>?
     private var captureID = UUID()
     private var liveTask: Task<Void, Never>?
@@ -303,6 +304,7 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
         if panel == nil {
             let next = AssistantPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             next.isOpaque = false; next.backgroundColor = .clear; next.hasShadow = true
+            next.isMovableByWindowBackground = true
             next.level = .floating; next.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             model.onClearScreen = { [weak self] in self?.invalidateCapture() }
             model.onRequireScreen = { [weak self] in
@@ -311,9 +313,13 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
                 // Capture a fresh frame for every submitted question.
                 self.captureForeground(sendAfterCapture: true)
             }
-            next.contentView = NSHostingView(rootView: AssistantInput(model: model, capture: { [weak self] in self?.captureForeground() }, close: { [weak self] in self?.dismissPanel() }))
+            next.contentView = NSHostingView(rootView: AssistantInput(model: model, onMove: { [weak self, weak next] in
+                guard let self, let next else { return }; self.panelAnchor = NSPoint(x: next.frame.midX, y: next.frame.minY)
+            }, capture: { [weak self] in self?.captureForeground() }, close: { [weak self] in self?.dismissPanel() }))
             model.onExpand = { [weak self, weak next] expanded in
-                guard let self, let next, self.panelExpanded != expanded else { return }
+                guard let self, let next else { return }
+                self.model.conversationExpanded = expanded
+                guard self.panelExpanded != expanded else { return }
                 self.panelExpanded = expanded
                 let old = next.frame
                 let desired = expanded ? NSSize(width: 400, height: 320) : NSSize(width: 360, height: 48)
@@ -332,14 +338,16 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
         let frame = screen.visibleFrame
-        panelAnchor = NSPoint(x: frame.midX, y: frame.minY + 20)
-        panel?.setFrameOrigin(NSPoint(x: frame.midX - (panel?.frame.width ?? 360) / 2, y: frame.minY + 20))
+        if panelAnchor == nil {
+            panelAnchor = NSPoint(x: frame.midX, y: frame.minY + 20)
+            panel?.setFrameOrigin(NSPoint(x: frame.midX - (panel?.frame.width ?? 360) / 2, y: frame.minY + 20))
+        }
         model.panelVisible = true
         panel?.makeKeyAndOrderFront(nil)
         if !preview { startLive() }
     }
     private func dismissPanel() {
-        stopLive(); invalidateCapture(); model.stop(); model.clearScreen(); model.panelVisible = false
+        stopLive(); invalidateCapture(); model.stop(); model.saveConversation(); model.clearScreen(); model.panelVisible = false
         panel?.orderOut(nil); previousApp?.activate(options: [])
     }
     private func stopLive() {
@@ -531,19 +539,50 @@ final class AssistantPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { orderOut(nil); dismiss?() }
 }
+struct AssistantDragRegion: NSViewRepresentable {
+    let onMove: () -> Void
+    func makeNSView(context: Context) -> DragView { let view = DragView(); view.onMove = onMove; return view }
+    func updateNSView(_ view: DragView, context: Context) { view.onMove = onMove }
+    final class DragView: NSView {
+        var onMove: (() -> Void)?
+        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event); onMove?() }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    }
+}
 struct AssistantInput: View {
     @ObservedObject var model: AssistantModel
+    let onMove: () -> Void
     let capture: () -> Void
     let close: () -> Void
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(spacing: 0) {
-            if !model.messages.isEmpty || model.error != nil {
+            if model.conversationExpanded {
                 HStack {
                     Text("MORIQ").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Spacer()
+                    AssistantDragRegion(onMove: onMove).frame(maxWidth: .infinity, minHeight: 24)
+                        .overlay(alignment: .top) { Capsule().fill(.secondary.opacity(0.35)).frame(width: 28, height: 3).padding(.top, 1).allowsHitTesting(false) }
+                        .help("拖动移动助手")
+                    Button { model.showingHistory.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.plain).help("历史记录")
+                        .popover(isPresented: $model.showingHistory, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("历史对话").font(.headline).padding(.horizontal, 12).padding(.top, 12)
+                                if model.conversations.isEmpty { Text("暂无历史对话").font(.callout).foregroundStyle(.secondary).padding(12) }
+                                else { ScrollView { LazyVStack(alignment: .leading, spacing: 2) {
+                                    ForEach(model.conversations) { conversation in
+                                        Button { model.openConversation(conversation.id) } label: {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(conversation.title).lineLimit(1)
+                                                Text(conversation.updatedAt, style: .date).font(.caption).foregroundStyle(.secondary)
+                                            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).padding(8)
+                                        }.buttonStyle(.plain)
+                                    }
+                                }.padding(.horizontal, 4) }.frame(maxHeight: 260) }
+                            }.padding(.bottom, 8).frame(width: 240)
+                        }
                     Button("新对话") { model.reset() }.buttonStyle(.borderless).controlSize(.small)
+                    Button { model.onExpand?(false) } label: { Image(systemName: "chevron.down") }.buttonStyle(.plain).help("收起对话")
                 }.padding(.horizontal, 16).padding(.top, 10)
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -573,19 +612,15 @@ struct AssistantInput: View {
                 Button(action: capture) { Image(systemName: "text.viewfinder") }.buttonStyle(.plain)
                     .disabled(model.screenLoading || model.working).help("读取整个屏幕文字")
                     .accessibilityLabel("读取整个屏幕文字")
-                TextField("问问当前屏幕…", text: $model.input).textFieldStyle(.plain).focused($focused).onSubmit { model.send() }
+                TextField("问问当前屏幕…", text: $model.input).textFieldStyle(.plain).focused($focused).onTapGesture { if !model.conversationExpanded && (!model.messages.isEmpty || model.error != nil) { model.onExpand?(true) } }.onSubmit { model.send() }
                 if model.working { Button { model.stop() } label: { Image(systemName: "stop.circle.fill") }.buttonStyle(.plain) }
                 else { Button { model.send() } label: { Image(systemName: "arrow.up.circle.fill") }.buttonStyle(.plain).disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }.padding(.horizontal, 18).frame(height: 48)
         }.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
              .overlay {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion || !model.panelVisible)) { timeline in
-                    let angle = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5) / 5 * 360
-                    RoundedRectangle(cornerRadius: 24).strokeBorder(
-                        AngularGradient(colors: [.clear, .blue.opacity(0.22), .cyan.opacity(0.9), .blue, .purple.opacity(0.65), .clear, .clear],
-                                        center: .center, angle: .degrees(angle)), lineWidth: model.working || model.screenLoading ? 2 : 1.3)
-                        .opacity(model.working || model.screenLoading ? 0.95 : 0.6)
-                }.allowsHitTesting(false)
+                RoundedRectangle(cornerRadius: 24)
+                    .strokeBorder(LinearGradient(colors: [.blue.opacity(0.38), .purple.opacity(0.22), .blue.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                    .allowsHitTesting(false)
             }
             .onAppear { focused = true }
     }

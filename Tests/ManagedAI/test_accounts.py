@@ -1,8 +1,10 @@
 import concurrent.futures, hashlib, os, sqlite3, subprocess, sys, tempfile, time, unittest, urllib.request, urllib.error, json
 from pathlib import Path
 root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root))
 sys.path.insert(0,str(root/'Services/ManagedAI'))
 from account_store import AccountStore
+from Services.MORIQPersonalBeta.account_store import AccountStore as PersonalBetaAccountStore
 from session_issuer import SessionIssuer
 from test_server import Upstream, gateway
 from http.server import ThreadingHTTPServer
@@ -36,16 +38,16 @@ class Tests(unittest.TestCase):
    results=list(pool.map(lambda _:AccountStore(self.file,clock=lambda:self.now).consume(session),range(40)))
   self.assertEqual(sum(results),5)
  def test_minute_rate_is_atomic_per_account_and_survives_restart(self):
-  store=AccountStore(self.file,clock=lambda:self.now,requests_per_minute=2)
+  store=PersonalBetaAccountStore(self.file,clock=lambda:self.now,requests_per_minute=2)
   store.put_account('a',20)
   session=store.authenticate(HASH)
   with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
    results=list(pool.map(lambda _:store.consume(session),range(8)))
   self.assertEqual(sum(results),2)
-  self.assertFalse(AccountStore(self.file,clock=lambda:self.now,requests_per_minute=2).consume(session))
+  self.assertFalse(PersonalBetaAccountStore(self.file,clock=lambda:self.now,requests_per_minute=2).consume(session))
   self.now+=60
   self.assertTrue(store.consume(session))
-  with self.assertRaises(ValueError): AccountStore(self.file,requests_per_minute=0)
+  with self.assertRaises(ValueError): PersonalBetaAccountStore(self.file,requests_per_minute=0)
  def test_multiple_processes_share_atomic_quota(self):
   code = "from account_store import AccountStore; import sys; s=AccountStore(sys.argv[1],clock=lambda:1780000000.0); print(int(s.consume(s.authenticate(sys.argv[2]))))"
   env=os.environ.copy(); env['PYTHONPATH']=str(root/'Services/ManagedAI')
