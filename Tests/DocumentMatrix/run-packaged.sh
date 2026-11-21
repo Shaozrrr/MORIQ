@@ -13,6 +13,9 @@ app="$work/check.app/Contents"
 mkdir -p "$app/MacOS" "$app/Resources"
 ln -s "$resources/Pandoc" "$app/Resources/Pandoc"
 ln -s "$resources/OfficeSuite" "$app/Resources/OfficeSuite"
+ln -s "$resources/ffmpeg" "$app/Resources/ffmpeg"
 cd "$root"
-swiftc MORIQ/DocumentConverter.swift MORIQ/PDFPageExporter.swift MORIQ/OCREngine.swift Tests/DocumentMatrix/main.swift -o "$app/MacOS/check"
+swiftc MORIQ/DocumentConverter.swift MORIQ/PDFPageExporter.swift MORIQ/OCREngine.swift \
+    MORIQ/ExternalMediaConverter.swift MORIQ/AudioConverter.swift MORIQ/VideoConverter.swift MORIQ/ImageConverter.swift \
+    Tests/DocumentMatrix/main.swift -o "$app/MacOS/check"
 "$app/MacOS/check"

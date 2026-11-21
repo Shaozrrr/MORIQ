@@ -1,0 +1,21 @@
+import Foundation
+var reducer = IslandActivityReducer()
+let task = UUID(), other = UUID()
+func activity(_ id: UUID, _ rev: Int, _ kind: IslandActivity.Kind, _ status: IslandActivity.Status, _ time: Double, _ expiry: Double? = nil) -> IslandActivity {
+    IslandActivity(id: id, revision: rev, kind: kind, status: status, updatedAt: time, expiresAt: expiry)
+}
+reducer.accept(activity(task, 1, .conversion, .running, 10))
+reducer.accept(activity(task, 0, .conversion, .failed, 11))
+precondition(reducer.activities[task]?.status == .running)
+reducer.accept(activity(task, 2, .conversion, .completed, 12, 20))
+reducer.accept(activity(task, 3, .conversion, .running, 13))
+precondition(reducer.activities[task]?.status == .completed)
+reducer.accept(activity(other, 1, .caption, .failed, 15, 18))
+precondition(reducer.primary?.id == other)
+reducer.expire(at: 18)
+precondition(reducer.primary?.id == task)
+reducer.expire(at: 20)
+precondition(reducer.primary == nil)
+reducer.accept(activity(task, 4, .conversion, .running, 21))
+precondition(reducer.activities[task] == nil)
+print("Island activity ordering, stale events and expiry passed")

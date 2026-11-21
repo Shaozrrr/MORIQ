@@ -7,6 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E22000000000000000000009 /* IslandResultViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000009 /* IslandResultViews.swift */; };
+		E22000000000000000000008 /* IslandClipboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000008 /* IslandClipboardView.swift */; };
+		E22000000000000000000007 /* IslandShelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000007 /* IslandShelfView.swift */; };
+		E22000000000000000000006 /* IslandNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000006 /* IslandNotesView.swift */; };
+		E22000000000000000000005 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000005 /* NowPlayingView.swift */; };
+		E22000000000000000000004 /* NowPlaying.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000004 /* NowPlaying.swift */; };
+		E22000000000000000000003 /* FocusTimerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000003 /* FocusTimerView.swift */; };
+		E22000000000000000000002 /* FocusTimerCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000002 /* FocusTimerCore.swift */; };
+		E22000000000000000000001 /* AgendaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000001 /* AgendaView.swift */; };
+		E22000000000000000000000 /* CalendarAgenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33000000000000000000000 /* CalendarAgenda.swift */; };
+		E1100000000000000000000B /* IslandExistingSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1100000000000000000000C /* IslandExistingSources.swift */; };
+		E11000000000000000000009 /* IslandPreviewAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1100000000000000000000A /* IslandPreviewAdapters.swift */; };
+		E11000000000000000000007 /* IslandModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000008 /* IslandModules.swift */; };
+		E11000000000000000000005 /* IslandActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000006 /* IslandActivity.swift */; };
+		E11000000000000000000003 /* IslandPrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000004 /* IslandPrototype.swift */; };
+		E11000000000000000000001 /* IslandInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000002 /* IslandInteraction.swift */; };
         AB1200000000000000000001 /* DeviceRenewalCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1200000000000000000002 /* DeviceRenewalCandidate.swift */; };
         AAAAAAAAAAAAAAAAAAAAAA05 /* LocalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAAAAAAAAAAAAAAAAAAA06 /* LocalDiagnostics.swift */; };
         AAAAAAAAAAAAAAAAAAAAAA03 /* CaptionWindowSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAAAAAAAAAAAAAAAAAAA04 /* CaptionWindowSizing.swift */; };
@@ -75,6 +91,22 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E33000000000000000000009 /* IslandResultViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandResultViews.swift; sourceTree = "<group>"; };
+		E33000000000000000000008 /* IslandClipboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandClipboardView.swift; sourceTree = "<group>"; };
+		E33000000000000000000007 /* IslandShelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandShelfView.swift; sourceTree = "<group>"; };
+		E33000000000000000000006 /* IslandNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandNotesView.swift; sourceTree = "<group>"; };
+		E33000000000000000000005 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
+		E33000000000000000000004 /* NowPlaying.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlaying.swift; sourceTree = "<group>"; };
+		E33000000000000000000003 /* FocusTimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusTimerView.swift; sourceTree = "<group>"; };
+		E33000000000000000000002 /* FocusTimerCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusTimerCore.swift; sourceTree = "<group>"; };
+		E33000000000000000000001 /* AgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaView.swift; sourceTree = "<group>"; };
+		E33000000000000000000000 /* CalendarAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAgenda.swift; sourceTree = "<group>"; };
+		E1100000000000000000000C /* IslandExistingSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandExistingSources.swift; sourceTree = "<group>"; };
+		E1100000000000000000000A /* IslandPreviewAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandPreviewAdapters.swift; sourceTree = "<group>"; };
+		E11000000000000000000008 /* IslandModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandModules.swift; sourceTree = "<group>"; };
+		E11000000000000000000006 /* IslandActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandActivity.swift; sourceTree = "<group>"; };
+		E11000000000000000000004 /* IslandPrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandPrototype.swift; sourceTree = "<group>"; };
+		E11000000000000000000002 /* IslandInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandInteraction.swift; sourceTree = "<group>"; };
         AB1200000000000000000002 /* DeviceRenewalCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRenewalCandidate.swift; sourceTree = "<group>"; };
         AAAAAAAAAAAAAAAAAAAAAA06 /* LocalDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDiagnostics.swift; sourceTree = "<group>"; };
         AAAAAAAAAAAAAAAAAAAAAA04 /* CaptionWindowSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionWindowSizing.swift; sourceTree = "<group>"; };
@@ -216,6 +248,22 @@
 				A2178A93012A46E0B83A1002 /* ManagedAIClient.swift */,
 				AB1200000000000000000002 /* DeviceRenewalCandidate.swift */,
 				DFEB77E49B795141CDFDDE0F /* DeepSeek.swift */,
+				E33000000000000000000000 /* CalendarAgenda.swift */,
+				E33000000000000000000001 /* AgendaView.swift */,
+				E33000000000000000000002 /* FocusTimerCore.swift */,
+				E33000000000000000000003 /* FocusTimerView.swift */,
+				E33000000000000000000004 /* NowPlaying.swift */,
+				E33000000000000000000005 /* NowPlayingView.swift */,
+				E33000000000000000000006 /* IslandNotesView.swift */,
+				E33000000000000000000007 /* IslandShelfView.swift */,
+				E33000000000000000000008 /* IslandClipboardView.swift */,
+				E33000000000000000000009 /* IslandResultViews.swift */,
+				E11000000000000000000004 /* IslandPrototype.swift */,
+				E11000000000000000000006 /* IslandActivity.swift */,
+				E11000000000000000000008 /* IslandModules.swift */,
+				E1100000000000000000000A /* IslandPreviewAdapters.swift */,
+				E1100000000000000000000C /* IslandExistingSources.swift */,
+				E11000000000000000000002 /* IslandInteraction.swift */,
 				FCF5926870A86144D55AD8D9 /* ConversionCoordinator.swift */,
 				A22222222222222222222222 /* ShelfCoordinator.swift */,
 				D4A71F5A019C4DB3A0A10002 /* StickyNotes.swift */,
@@ -360,6 +408,22 @@
 				A2178A93012A46E0B83A1001 /* ManagedAIClient.swift in Sources */,
 				AB1200000000000000000001 /* DeviceRenewalCandidate.swift in Sources */,
 				1BCBCDE4F00B2869774A6F12 /* DeepSeek.swift in Sources */,
+				E22000000000000000000000 /* CalendarAgenda.swift in Sources */,
+				E22000000000000000000001 /* AgendaView.swift in Sources */,
+				E22000000000000000000002 /* FocusTimerCore.swift in Sources */,
+				E22000000000000000000003 /* FocusTimerView.swift in Sources */,
+				E22000000000000000000004 /* NowPlaying.swift in Sources */,
+				E22000000000000000000005 /* NowPlayingView.swift in Sources */,
+				E22000000000000000000006 /* IslandNotesView.swift in Sources */,
+				E22000000000000000000007 /* IslandShelfView.swift in Sources */,
+				E22000000000000000000008 /* IslandClipboardView.swift in Sources */,
+				E22000000000000000000009 /* IslandResultViews.swift in Sources */,
+				E11000000000000000000003 /* IslandPrototype.swift in Sources */,
+				E11000000000000000000005 /* IslandActivity.swift in Sources */,
+				E11000000000000000000007 /* IslandModules.swift in Sources */,
+				E11000000000000000000009 /* IslandPreviewAdapters.swift in Sources */,
+				E1100000000000000000000B /* IslandExistingSources.swift in Sources */,
+				E11000000000000000000001 /* IslandInteraction.swift in Sources */,
 				C366AC39D734F61273D00E22 /* ConversionCoordinator.swift in Sources */,
 				A11111111111111111111111 /* ShelfCoordinator.swift in Sources */,
 				D4A71F5A019C4DB3A0A10001 /* StickyNotes.swift in Sources */,

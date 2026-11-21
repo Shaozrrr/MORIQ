@@ -85,10 +85,10 @@ enum Feature: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     private enum Section: String, CaseIterable, Identifiable {
-        case features, shortcuts, general
+        case features, shortcuts, island, general
         var id: String { rawValue }
-        var title: String { switch self { case .features: "功能设置"; case .shortcuts: "快捷键"; case .general: "通用设置" } }
-        var symbol: String { switch self { case .features: "square.grid.2x2"; case .shortcuts: "keyboard"; case .general: "slider.horizontal.3" } }
+        var title: String { switch self { case .features: "功能设置"; case .shortcuts: "快捷键"; case .island: "灵动岛"; case .general: "通用设置" } }
+        var symbol: String { switch self { case .features: "square.grid.2x2"; case .shortcuts: "keyboard"; case .island: "rectangle.topthird.inset.filled"; case .general: "slider.horizontal.3" } }
     }
     @State private var diagnosticsStopping = false
     @State private var localDiagnosticCounts: [DiagnosticFeature:Int] = [:]
@@ -150,6 +150,7 @@ struct SettingsView: View {
                 switch section {
                 case .features: features
                 case .shortcuts: shortcuts
+                case .island: ScrollView { IslandModuleSettingsView(model: .shared) }
                 case .general: general
                 }
                 Spacer(minLength: 0)
@@ -379,6 +380,7 @@ struct SettingsView: View {
     }
 }
 struct FeatureRow: View {
+    @State private var showingPhrases = false
     let feature: Feature
     @Binding var enabled: Bool
     let demo: () -> Void
@@ -392,9 +394,77 @@ struct FeatureRow: View {
                 Text(feature.detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if feature == .clipboard && enabled { Button("常用短语") { showingPhrases = true }.controlSize(.small) }
             if feature == .notes && enabled { Button("新建", action: newNote).controlSize(.small).accessibilityLabel("新建屏幕便签") }
             Button("演示", action: demo).controlSize(.small).accessibilityLabel("演示\(feature.title)")
             Toggle("启用\(feature.title)", isOn: $enabled).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel("启用\(feature.title)")
         }.frame(minHeight: 69)
+            .sheet(isPresented: $showingPhrases) { QuickPhrasesView() }
+    }
+}
+
+private struct QuickPhrase: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var text: String
+}
+
+private struct QuickPhrasesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("moriq.quickPhrases.v1") private var stored = Data()
+    @State private var phrases: [QuickPhrase] = []
+    @State private var draft = ""
+    @State private var readError = false
+    @State private var feedback = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("常用短语").font(.title3.weight(.semibold))
+                    Text("保存在这台 Mac 上，点击复制后即可粘贴。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            HStack {
+                TextField("添加常用短语", text: $draft).textFieldStyle(.roundedBorder).onSubmit(add)
+                Button("添加", action: add).disabled(readError || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || phrases.count >= 100)
+            }
+            if readError { Text("无法读取已保存的短语，请稍后重试。") .foregroundStyle(.secondary) }
+            else if phrases.isEmpty { Text("还没有常用短语。") .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(phrases) { phrase in
+                            HStack(spacing: 10) {
+                                Text(phrase.text).lineLimit(2).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                Button("复制") {
+                                    NSPasteboard.general.clearContents()
+                                    if NSPasteboard.general.setString(phrase.text, forType: .string) { feedback = "已复制" } else { feedback = "复制失败" }
+                                }
+                                Button { phrases.removeAll { $0.id == phrase.id }; persist() } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.plain).help("删除短语")
+                            }.padding(.vertical, 9)
+                            Divider()
+                        }
+                    }
+                }
+            }
+            Text(feedback).font(.caption).foregroundStyle(.secondary).frame(height: 14, alignment: .leading)
+        }.padding(22).frame(width: 440, height: 360)
+            .onAppear {
+                guard !stored.isEmpty else { return }
+                do { phrases = try JSONDecoder().decode([QuickPhrase].self, from: stored) }
+                catch { readError = true }
+            }
+    }
+    private func add() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !readError, !text.isEmpty, text.utf8.count <= 16000, phrases.count < 100 else { feedback = "短语过长或数量已达上限"; return }
+        phrases.insert(QuickPhrase(text: text), at: 0); persist(); draft = ""; feedback = ""
+    }
+    private func persist() {
+        guard let encoded = try? JSONEncoder().encode(phrases) else { feedback = "保存失败"; return }
+        stored = encoded
     }
 }

@@ -26,6 +26,10 @@
 	<string>用于转换和暂存你选择的文稿。</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>用于转换和暂存你选择的下载文件。</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>用于在灵动岛显示你的日程。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>用于显示和控制音乐播放。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSpeechRecognitionUsageDescription</key>

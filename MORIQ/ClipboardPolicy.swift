@@ -9,3 +9,39 @@ struct ClipboardPolicy {
         return !types.contains { excludedTypes.contains($0.lowercased()) }
     }
 }
+
+/// Explicit, conservative removal of common campaign parameters from one URL.
+/// Preserve the original bytes of every other parameter and the fragment.
+enum CleanClipboardLink {
+    static func clean(_ input: String) -> String? {
+        guard input == input.trimmingCharacters(in: .whitespacesAndNewlines),
+              !input.contains(where: { $0.isWhitespace || $0.isNewline }),
+              let components = URLComponents(string: input),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              let question = input.firstIndex(of: "?") else { return nil }
+        let hash = input.firstIndex(of: "#") ?? input.endIndex
+        guard question < hash else { return nil }
+        let queryStart = input.index(after: question)
+        let query = input[queryStart..<hash]
+        let pieces = query.split(separator: "&", omittingEmptySubsequences: false)
+        let tracking: Set<String> = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "fbclid"]
+        let sensitive: Set<String> = ["signature", "sig", "token", "access_token", "id_token", "code", "state", "expires", "policy", "key-pair-id", "hmac", "oauth_signature", "x-signature", "jwt", "authorization"]
+        var filtered: [Substring] = []
+        var removed = false
+        for piece in pieces {
+            let raw = piece.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            guard let decoded = String(raw).removingPercentEncoding else { return nil }
+            let key = decoded.lowercased()
+            // Signed, expiring and authorization URLs must be left untouched.
+            if sensitive.contains(key) || key.hasPrefix("x-amz-") || key.hasPrefix("x-goog-") { return nil }
+            if tracking.contains(key) { removed = true } else { filtered.append(piece) }
+        }
+        guard removed else { return nil }
+        let base = String(input[..<question])
+        let suffix = hash == input.endIndex ? "" : String(input[hash...])
+        let remaining = filtered.joined(separator: "&")
+        return base + (remaining.isEmpty ? "" : "?" + remaining) + suffix
+    }
+}

@@ -25,7 +25,8 @@ actor LeaseReleaseCounter { var count = 0; func release() { count += 1 } }
     let expired = AIServiceRouter.provider(configuredValue: local.absoluteString, tokenLoader: { "invalid-" + String(repeating:"x", count: 40) }, allowLoopbackForTesting: true)
     do { try await expired.stream(messages:[ChatMessage(role:"user",content:"test")]) { _ in }; fatalError("expired account accepted") }
     catch ManagedAIError.sessionExpired {}
-    guard AIErrorMessage.describe(ManagedAIError.sessionExpired) == "登录已过期，请重新登录。", AIErrorMessage.describe(ManagedAIError.notSignedIn) == "请先登录 MORIQ 账户。" else { fatalError("account error message") }
+    guard AIErrorMessage.describe(ManagedAIError.sessionExpired) == "服务连接已失效，请稍后重试。",
+          AIErrorMessage.describe(ManagedAIError.notSignedIn) == "服务连接尚未完成，请检查网络后重试。" else { fatalError("service connection error message") }
     guard let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:1,pixelsHigh:1,bitsPerSample:8,samplesPerPixel:3,hasAlpha:false,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0), let jpeg = bitmap.representation(using:.jpeg,properties:[:]) else { fatalError("fixture") }
     let routed = AIServiceRouter.provider(configuredValue: local.absoluteString, tokenLoader: { token }, allowLoopbackForTesting: true)
     var answer = ""

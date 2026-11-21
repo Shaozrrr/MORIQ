@@ -217,14 +217,27 @@ def sign(app_path, out, identity, version, build_number):
     print('已生成本地签名候选:', dest)
     print('尚未公证或发布；仍需检查全部嵌套代码、许可及实际机器运行。')
 
-def package(app_path, out, identity):
+def verify_packaged_app(app, arch):
+    if arch is None:
+        assert_universal(app)
+    else:
+        binary = app / 'Contents/MacOS/MORIQ'
+        arches = run(['lipo', '-archs', binary], capture=True).split()
+        if set(arches) != {arch}:
+            raise ReleaseError(f'应用架构与安装包目标不一致：{arches}，预期 {arch}')
+    require_developer_signature(app)
+    run(['codesign', '--verify', '--deep', '--strict', app])
+
+def package(app_path, out, identity, arch=None):
     identity_check(identity)
     app = Path(app_path).expanduser().resolve(strict=True)
     if app.name != 'MORIQ.app': raise ReleaseError('输入必须是签名后的 MORIQ.app。')
-    assert_universal(app); require_developer_signature(app)
-    run(['codesign', '--verify', '--deep', '--strict', app])
+    verify_packaged_app(app, arch)
+    ticket = app / 'Contents/CodeResources'
+    stapled_ticket = ticket.read_bytes() if ticket.is_file() else None
     output = safe_new_dir(out)
-    dmg = output / 'MORIQ.dmg'
+    dmg_name = {'arm64': 'MORIQ-Apple.dmg', 'x86_64': 'MORIQ-Intel.dmg'}
+    dmg = output / dmg_name.get(arch, 'MORIQ.dmg')
     settings = ROOT / 'Tools/Release/dmg_settings.py'
     assets = ROOT / 'Tools/Release/assets'
     run([sys.executable, '-m', 'dmgbuild', '-s', settings,
@@ -237,9 +250,10 @@ def package(app_path, out, identity):
         run(['hdiutil', 'attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg])
         try:
             mounted_app = mount / 'MORIQ.app'
-            assert_universal(mounted_app)
-            require_developer_signature(mounted_app)
-            run(['codesign', '--verify', '--deep', '--strict', mounted_app])
+            verify_packaged_app(mounted_app, arch)
+            mounted_ticket = mounted_app / 'Contents/CodeResources'
+            if stapled_ticket is not None and (not mounted_ticket.is_file() or mounted_ticket.read_bytes() != stapled_ticket):
+                raise ReleaseError('安装镜像中的应用缺少原有公证票据。')
             if not (mount / 'Applications').is_symlink() or os.readlink(mount / 'Applications') != '/Applications':
                 raise ReleaseError('安装镜像缺少正确的应用程序快捷入口。')
         finally:
@@ -256,12 +270,13 @@ def main(argv=None):
     p = sub.add_parser('build'); p.add_argument('--out', required=True); p.add_argument('--speech-endpoint', help='已核验的远端字幕 WSS 地址'); p.add_argument('--caption-punct-available', action='store_true', help='在设置中提供增强字幕开关（仍默认关闭）'); p.add_argument('--ai-endpoint', help='已核验的远端 HTTPS 助手服务地址'); p.add_argument('--activation-endpoint', help='已核验的 HTTPS 设备续期服务地址'); p.add_argument('--shared-leases', action='store_true', help='显式启用经过联测的设备共享会话'); p.add_argument('--full-featured', action='store_true', help='要求好友版字幕、助手、设备激活及共享会话全部配置'); p.add_argument('--anonymous-device', action='store_true', help='启用免注册接入，须先验证服务端和防刷'); p.add_argument('--native-only', action='store_true', help='字幕使用原生实时翻译，不启用额外自动译文')
     p = sub.add_parser('sign'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True); p.add_argument('--version', required=True); p.add_argument('--build-number', required=True)
     p = sub.add_parser('package'); p.add_argument('--app', required=True); p.add_argument('--out', required=True); p.add_argument('--identity', required=True)
+    p.add_argument('--arch', choices=('arm64', 'x86_64'), help='打包已签名的单架构应用，默认要求双架构')
     a = parser.parse_args(argv)
     try:
         if a.command == 'preflight': identity_check(a.identity); print('找到有效证书；这不代表可公证或可发行。')
         elif a.command == 'build': build(a.out, a.speech_endpoint, a.caption_punct_available, a.ai_endpoint, a.full_featured, a.activation_endpoint, a.shared_leases, a.anonymous_device, a.native_only)
         elif a.command == 'sign': sign(a.app, a.out, a.identity, a.version, a.build_number)
-        else: package(a.app, a.out, a.identity)
+        else: package(a.app, a.out, a.identity, a.arch)
     except (ReleaseError, FileNotFoundError, PermissionError, plistlib.InvalidFileException, OSError) as e:
         print(f'失败：{e}', file=sys.stderr); return 1
     return 0

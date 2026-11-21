@@ -120,20 +120,32 @@ import Darwin
         InteractionArbiter.selectingScreenshot = true
         for screen in NSScreen.screens {
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
-            let window = SelectionPanel(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            let window = SelectionPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.isOpaque = false; window.backgroundColor = .clear; window.level = .screenSaver
+            window.hidesOnDeactivate = false
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             let screenFrame = screen.frame, visibleFrame = screen.visibleFrame
+            view.placeCancelButton(visibleTop: visibleFrame.maxY - screenFrame.minY)
             view.selected = { [weak self] rect in self?.capture(display: number.uint32Value, rect: rect, screenFrame: screenFrame, visibleFrame: visibleFrame) }
-            view.cancel = { [weak self] in self?.dismissOverlays(); self?.onSelectionCancelled?() }
-            window.contentView = view; window.makeKeyAndOrderFront(nil)
-            // The selection view must receive Escape even before the first click.
+            view.cancel = { [weak self] in self?.cancelSelection() }
+            window.contentView = view
+            window.orderFrontRegardless()
+            window.makeKey()
             window.makeFirstResponder(view)
             overlays.append(window)
         }
-        if overlays.isEmpty { InteractionArbiter.selectingScreenshot = false; onSelectionCancelled?() }
-        else { NSCursor.crosshair.push() }
+        guard !overlays.isEmpty else {
+            InteractionArbiter.selectingScreenshot = false
+            onSelectionCancelled?()
+            return
+        }
+        NSCursor.crosshair.push()
+    }
+    private func cancelSelection() {
+        guard !overlays.isEmpty else { return }
+        dismissOverlays()
+        onSelectionCancelled?()
     }
     private func dismissOverlays() {
         InteractionArbiter.selectingScreenshot = false
@@ -192,10 +204,29 @@ import Darwin
     enum CaptureFailure: Error { case unavailable }
 }
 final class SelectionPanel: NSPanel { override var canBecomeKey: Bool { true } }
+private final class SelectionCancelButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
 final class SelectionView: NSView {
     var selected: ((CGRect) -> Void)?; var cancel: (() -> Void)?
     private var start: CGPoint?; private var end: CGPoint?
+    func placeCancelButton(visibleTop: CGFloat) {
+        let button = SelectionCancelButton(frame: CGRect(x: bounds.maxX - 52, y: visibleTop - 52, width: 36, height: 36))
+        button.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .white
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
+        button.layer?.cornerRadius = 18
+        button.setAccessibilityLabel("取消截图")
+        button.target = self
+        button.action = #selector(cancelFromButton)
+        addSubview(button)
+    }
+    @objc private func cancelFromButton() { cancel?() }
     override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { start = convert(event.locationInWindow, from: nil); end = start; needsDisplay = true }
     override func mouseDragged(with event: NSEvent) { end = convert(event.locationInWindow, from: nil); needsDisplay = true }
     override func mouseUp(with event: NSEvent) { end = convert(event.locationInWindow, from: nil); if let rect = selection { selected?(rect) } }
@@ -346,7 +377,10 @@ struct ScreenshotResultView: View {
     private enum Tool: String, CaseIterable { case rectangle = "画框", text = "文字", arrow = "箭头", pen = "画笔", redact = "遮盖" }
     let image: CGImage
     let pasteboard: NSPasteboard
-    init(image: CGImage, pasteboard: NSPasteboard = .general) { self.image = image; self.pasteboard = pasteboard }
+    private let onPreviewChange: ((CGImage?) -> Void)?
+    init(image: CGImage, pasteboard: NSPasteboard = .general, onPreviewChange: ((CGImage?) -> Void)? = nil) {
+        self.image = image; self.pasteboard = pasteboard; self.onPreviewChange = onPreviewChange
+    }
     @State private var ocr = ""
     @State private var ocrStatus = ""
     @State private var recognitionGeneration = UUID()
@@ -355,6 +389,7 @@ struct ScreenshotResultView: View {
     @State private var annotationText = ""
     @State private var annotations: [ScreenshotAnnotation] = []
     @State private var renderedPreview: CGImage?
+    @State private var renderedAnnotations: [ScreenshotAnnotation] = []
     @State private var previewTask: Task<Void, Never>?
     @State private var previewGeneration = UUID()
     @State private var redoAnnotations: [ScreenshotAnnotation] = []
@@ -388,8 +423,8 @@ struct ScreenshotResultView: View {
                 Picker("标注工具", selection: $tool) {
                     ForEach(Tool.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 270)
-                Button("撤销") { if let last = annotations.popLast() { redoAnnotations.append(last); copied = false } }.disabled(annotations.isEmpty)
-                Button("重做") { if let last = redoAnnotations.popLast() { annotations.append(last); copied = false } }.disabled(redoAnnotations.isEmpty)
+                Button("撤销", action: undoAnnotation).disabled(annotations.isEmpty)
+                Button("重做", action: redoAnnotation).disabled(redoAnnotations.isEmpty)
                 Spacer(minLength: 4)
                 Button("保存") { withAnimation(.easeOut(duration: 0.18)) { saveVisible.toggle() } }
                 Button(copied ? "已复制" : "复制图片") { copyEdited() }
@@ -428,6 +463,9 @@ struct ScreenshotResultView: View {
                 GeometryReader { geo in
                     ZStack(alignment: .topLeading) {
                         Image(decorative: renderedPreview ?? image, scale: 1).resizable().frame(width: geo.size.width, height: geo.size.height)
+                        ForEach(Array(annotations.enumerated()), id: \.offset) { _, annotation in
+                            if case .redact(let rect) = annotation { redaction(rect, size: geo.size).allowsHitTesting(false) }
+                        }
                         if let draft {
                             if tool == .redact { redaction(draft, size: geo.size) }
                             else { rectangle(draft, size: geo.size) }
@@ -452,19 +490,19 @@ struct ScreenshotResultView: View {
                             case .rectangle, .redact:
                                 let rect = normalizedRect(value.startLocation, value.location, size: geo.size)
                                 if rect.width > 0.005 && rect.height > 0.005 {
-                                    annotations.append(tool == .redact ? .redact(rect) : .rectangle(rect)); redoAnnotations.removeAll(); copied = false
+                                    addAnnotation(tool == .redact ? .redact(rect) : .rectangle(rect))
                                 }
                                 draft = nil
                             case .arrow:
                                 let start = normalizedPoint(value.startLocation, size: geo.size), end = normalizedPoint(value.location, size: geo.size)
-                                if hypot(start.x - end.x, start.y - end.y) > 0.005 { annotations.append(.arrow(start, end)); redoAnnotations.removeAll(); copied = false }
+                                if hypot(start.x - end.x, start.y - end.y) > 0.005 { addAnnotation(.arrow(start, end)) }
                                 draftPoints = []
                             case .pen:
-                                if draftPoints.count > 1 { annotations.append(.pen(draftPoints)); redoAnnotations.removeAll(); copied = false }
+                                if draftPoints.count > 1 { addAnnotation(.pen(draftPoints)) }
                                 draftPoints = []
                             case .text:
                                 let text = annotationText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !text.isEmpty { annotations.append(.text(text, normalizedPoint(value.location, size: geo.size))); redoAnnotations.removeAll(); copied = false }
+                                if !text.isEmpty { addAnnotation(.text(text, normalizedPoint(value.location, size: geo.size))) }
                             }
                         })
                 }
@@ -508,7 +546,11 @@ struct ScreenshotResultView: View {
             }
             Text(aiVisible || usedAITranslation ? "AI 提问或翻译会将截图发送给 AI 服务" : "图片与标注在本机处理").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
         }.padding(16)
-            .onDisappear { recognitionGeneration = UUID(); previewGeneration = UUID(); previewTask?.cancel(); aiTranslationTask?.cancel(); invalidateAI() }
+            .onAppear { onPreviewChange?(annotations.isEmpty ? image : (renderedAnnotations == annotations ? renderedPreview : nil)) }
+            .onDisappear {
+                onPreviewChange?(nil)
+                recognitionGeneration = UUID(); previewGeneration = UUID(); previewTask?.cancel(); aiTranslationTask?.cancel(); invalidateAI()
+            }
             .onChange(of: annotations) { _, _ in
                 refreshPreview()
                 recognitionGeneration = UUID(); aiTranslationTask?.cancel(); aiTranslationTask = nil; usedAITranslation = false; working = false; translating = false
@@ -530,14 +572,45 @@ struct ScreenshotResultView: View {
                 translating = false
             }
     }
+    private func addAnnotation(_ annotation: ScreenshotAnnotation) {
+        onPreviewChange?(nil)
+        annotations.append(annotation)
+        redoAnnotations.removeAll()
+        copied = false
+    }
+
+    private func undoAnnotation() {
+        guard let last = annotations.last else { return }
+        onPreviewChange?(nil)
+        annotations.removeLast()
+        redoAnnotations.append(last)
+        copied = false
+    }
+
+    private func redoAnnotation() {
+        guard let last = redoAnnotations.popLast() else { return }
+        onPreviewChange?(nil)
+        annotations.append(last)
+        copied = false
+    }
+
     private func refreshPreview() {
         previewTask?.cancel()
         let generation = UUID(); previewGeneration = generation
         let current = annotations
+        if current.isEmpty {
+            renderedAnnotations = []
+            renderedPreview = nil
+            onPreviewChange?(image)
+            return
+        }
+        onPreviewChange?(nil)
         previewTask = Task { @MainActor in
             let rendered = await Task.detached(priority: .userInitiated) { ScreenshotAnnotationRenderer.render(image, annotations: current) }.value
-            guard !Task.isCancelled, previewGeneration == generation, let rendered else { return }
+            guard !Task.isCancelled, previewGeneration == generation, annotations == current, let rendered else { return }
+            renderedAnnotations = current
             renderedPreview = rendered
+            onPreviewChange?(rendered)
         }
     }
     private var toolHint: String {

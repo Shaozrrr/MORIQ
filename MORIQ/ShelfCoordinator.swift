@@ -104,7 +104,7 @@ enum ShelfDropDecoder {
 
 @MainActor final class ShelfCoordinator {
     private let injectedStore: ShelfStore?
-    private lazy var store: ShelfStore = injectedStore ?? ShelfStore()
+    lazy var store: ShelfStore = injectedStore ?? ShelfStore()
     private let state = ShelfState()
     private var panel: NSPanel?
     private var dragMonitor: DragActivityMonitor?

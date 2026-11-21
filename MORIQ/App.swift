@@ -43,7 +43,7 @@ struct MORIQApp: App {
     @NSApplicationDelegateAdaptor(AppCoordinator.self) var coordinator
     var body: some Scene { Settings { EmptyView() } }
 }
-@MainActor final class AppCoordinator: NSObject, NSApplicationDelegate {
+@MainActor final class AppCoordinator: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // Evaluated before any stored product coordinator or data store.
     private let runtimeEnvironment = RuntimeEnvironment.requireSafeProcess()
     private let settings: SettingsStore = {
@@ -62,6 +62,7 @@ struct MORIQApp: App {
         }
         return AppFlow(defaults: defaults, allowSystemPermissions: environment.mode == .product)
     }()
+    private var islandPrototype: IslandPrototype?
     private let assistant = AssistantCoordinator()
     private let converter: ConversionCoordinator = {
         let environment = RuntimeEnvironment.requireSafeProcess()
@@ -195,6 +196,10 @@ struct MORIQApp: App {
     func applicationDidFinishLaunching(_ notification: Notification) {
         LocalDiagnostics.shared.record(.startup, .launch, .success)
         #if DEBUG
+        if CommandLine.arguments.contains("--preview-island-prototype") {
+            NSApp.setActivationPolicy(.accessory)
+            let prototype = IslandPrototype(); islandPrototype = prototype; prototype.start(); return
+        }
         if CommandLine.arguments.contains("--verify-diagnostics-conversion") {
             Task { @MainActor in
                 guard let suiteName=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_SUITE"], let defaults=UserDefaults(suiteName:suiteName), let logPath=ProcessInfo.processInfo.environment["MORIQ_DIAGNOSTICS_TEST_FILE"] else {exit(2)}
@@ -258,6 +263,14 @@ struct MORIQApp: App {
         }
         if CommandLine.arguments.contains("--preview-wheel-interaction") {
             converter.previewWheelInteraction()
+            return
+        }
+        if CommandLine.arguments.contains("--verify-screenshot-editor-fallback") {
+            Task { @MainActor in
+                let passed = await verifyScreenshotEditorFallback()
+                print(passed ? "TEST_PASS_SCREENSHOT_EDITOR_FALLBACK" : "TEST_FAIL_SCREENSHOT_EDITOR_FALLBACK")
+                exit(passed ? 0 : 1)
+            }
             return
         }
         if CommandLine.arguments.contains("--preview-screenshot-replacement") {
@@ -707,11 +720,7 @@ struct MORIQApp: App {
         screenshot.onSelectionCancelled = { [weak self] in self?.inlineScreenshot.resume() }
         screenshot.onCaptureWithSelection = { [weak self] image, selection, screen, visible in
             guard let self else { return }
-            if !self.inlineScreenshot.present(image: image, selection: selection, screen: screen, visible: visible) {
-                self.inlineScreenshot.resume()
-                self.flow.notice = "无法在当前屏幕显示截图工具，请重试。"
-                self.openMain()
-            }
+            self.showScreenshotResult(image, selection: selection, screen: screen, visible: visible)
         }
         screenshot.onError = { [weak self] message in
             guard let self else { return }
@@ -949,6 +958,26 @@ struct MORIQApp: App {
         guard runtimeEnvironment.permits(.automaticFeatures, recordRefusal: { message in
             FileHandle.standardError.write(Data((message + "\n").utf8))
         }) else { flow.notice = "内部测试已禁用系统功能。"; return }
+        if islandPrototype == nil {
+            let model = IslandPreviewContent.shared
+            let island = IslandPrototype(content: model)
+            island.onModuleView = { [weak self, weak island] module in
+                guard let self else { return nil }
+                if module == .notes {
+                    return AnyView(IslandNotesView(store: self.stickyNotes.store, createNote: { [weak self] in self?.newStickyNote() }, onEditingChange: { [weak island] editing in island?.setEditing(editing) }))
+                }
+                if module == .shelf { return AnyView(IslandShelfView(store: self.shelf.store)) }
+                if module == .clipboard { return AnyView(IslandClipboardView(store: self.clipboard.store, enabled: self.settings.enabled[Feature.clipboard.rawValue] == true)) }
+                switch module {
+                case .conversion: return AnyView(IslandConversionResults(flow: self.flow))
+                case .captions: return AnyView(IslandLiveCaptions(coordinator: self.captions))
+                case .screenshot: return AnyView(IslandScreenshotResult(coordinator: self.inlineScreenshot, flow: self.flow))
+                case .assistant: return AnyView(self.assistant.islandResultView())
+                default: return nil
+                }
+            }
+            island.start(); islandPrototype = island
+        }
         let captionsStatus = GlobalShortcutRegistry.shared.enable(.captions, retryOnUpdate: true) { [weak self] in self?.toggleLiveCaptions() }
         if captionsStatus != noErr { flow.notice = "实时字幕的快捷键注册失败（\(captionsStatus)），请检查冲突。" }
         for feature in [Feature.converter, .assistant, .shelf, .clipboard, .screenshot, .notes] where settings.enabled[feature.rawValue] == true {
@@ -978,7 +1007,38 @@ struct MORIQApp: App {
         if status != noErr { flow.notice = "屏幕便签已启用；快捷键被占用，请在设置中更换。" }
         return noErr
     }
-    @objc func openMain() {
+    private func showScreenshotResult(_ image: CGImage, selection: CGRect, screen: CGRect, visible: CGRect,
+                                      activateMainWindow: Bool = true) {
+        guard !inlineScreenshot.present(image: image, selection: selection, screen: screen, visible: visible) else { return }
+        inlineScreenshot.resume()
+        flow.page = .screenshotEditor(image)
+        presentMainWindow(activate: activateMainWindow)
+    }
+
+    #if DEBUG
+    private func verifyScreenshotEditorFallback() async -> Bool {
+        guard let context = CGContext(data: nil, width: 96, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 96, height: 64))
+        guard let image = context.makeImage() else { return false }
+        showScreenshotResult(image, selection: .zero, screen: .zero, visible: .zero, activateMainWindow: false)
+        guard case .screenshotEditor(let opened) = flow.page, opened === image, let window = mainWindow else { return false }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while flow.screenshotPreview == nil && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        let usedSameImage = flow.screenshotPreview === image && window.isVisible
+        window.close()
+        let cleared: Bool
+        if case .settings = flow.page { cleared = flow.screenshotPreview == nil } else { cleared = false }
+        return usedSameImage && cleared
+    }
+    #endif
+
+    @objc func openMain() { presentMainWindow(activate: true) }
+
+    private func presentMainWindow(activate: Bool) {
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 650), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "MORIQ"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 650, height: 560)
@@ -989,10 +1049,22 @@ struct MORIQApp: App {
                 }
                 window.contentView = NSHostingView(rootView: root.defaultAppStorage(defaults))
             } else { window.contentView = NSHostingView(rootView: root) }
+            window.delegate = self
             window.center(); mainWindow = window
         }
-        NSApp.activate(ignoringOtherApps: true); mainWindow?.makeKeyAndOrderFront(nil)
+        if activate {
+            NSApp.activate(ignoringOtherApps: true)
+            mainWindow?.makeKeyAndOrderFront(nil)
+        } else {
+            mainWindow?.orderFront(nil)
+        }
     }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === mainWindow,
+              case .screenshotEditor = flow.page else { return }
+        flow.page = .settings
+    }
+
     @objc func openPermissions() { if flow.introComplete { flow.autoEnterWhenReady = false; flow.page = .permissions }; openMain() }
     @objc func openConversionResults() {
         guard flow.introComplete && flow.mayEnter else { if flow.introComplete { flow.page = .permissions }; openMain(); return }
@@ -1032,6 +1104,7 @@ struct MORIQApp: App {
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) {
+        islandPrototype?.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--verify-diagnostics-conversion") {
             Task { @MainActor in

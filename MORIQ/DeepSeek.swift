@@ -257,6 +257,34 @@ struct DeepSeekProvider {
         guard receivedContent else { throw DeepSeekError.emptyResponse }
     }
 }
+struct SavedAssistantMessage: Codable {
+    let role: String
+    let text: String
+}
+struct SavedAssistantConversation: Codable, Identifiable {
+    let id: UUID
+    var updatedAt: Date
+    var messages: [SavedAssistantMessage]
+    var title: String { String((messages.first { $0.role == "user" }?.text ?? "对话").prefix(36)) }
+}
+private enum AssistantConversationStore {
+    static var url: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MORIQ", isDirectory: true).appendingPathComponent("assistant-history.json")
+    }
+    static func load() -> [SavedAssistantConversation] {
+        guard let data = try? Data(contentsOf: url), let result = try? JSONDecoder().decode([SavedAssistantConversation].self, from: data) else { return [] }
+        return result
+    }
+    static func save(_ conversations: [SavedAssistantConversation]) {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let data = try JSONEncoder().encode(Array(conversations.prefix(100)))
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch { NSLog("MORIQ: unable to save assistant history") }
+    }
+}
 @MainActor final class AssistantModel: ObservableObject {
     @Published var input = ""
     @Published var messages: [ChatMessage] = []
@@ -269,6 +297,10 @@ struct DeepSeekProvider {
     @Published var screenLoading = false
     @Published var liveScreen = false
     @Published var panelVisible = false
+    @Published var conversationExpanded = false
+    @Published var showingHistory = false
+    @Published var conversations = AssistantConversationStore.load()
+    private var conversationID = UUID()
     var onExpand: ((Bool) -> Void)?
     var onClearScreen: (() -> Void)?
     var onRequireScreen: (() -> Void)?
@@ -302,7 +334,27 @@ struct DeepSeekProvider {
         error = nil
         startRequest(messages.filter { !$0.content.isEmpty })
     }
-    func reset() { requestID = UUID(); task?.cancel(); task = nil; messages.removeAll(); input = ""; error = nil; clearScreen(); working = false; onExpand?(false) }
+    func saveConversation() {
+        let entries = messages.compactMap { message -> SavedAssistantMessage? in
+            let text = (message.role == "user" ? (message.displayContent ?? message.content) : message.content).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, message.role == "user" || message.role == "assistant" else { return nil }
+            return SavedAssistantMessage(role: message.role, text: text)
+        }
+        guard entries.contains(where: { $0.role == "user" }) else { return }
+        conversations.removeAll { $0.id == conversationID }
+        conversations.insert(SavedAssistantConversation(id: conversationID, updatedAt: Date(), messages: entries), at: 0)
+        if conversations.count > 100 { conversations = Array(conversations.prefix(100)) }
+        AssistantConversationStore.save(conversations)
+    }
+    func openConversation(_ id: UUID) {
+        saveConversation()
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        requestID = UUID(); task?.cancel(); task = nil; working = false
+        conversationID = conversation.id
+        messages = conversation.messages.map { ChatMessage(role: $0.role, content: $0.text) }
+        error = nil; clearScreen(); showingHistory = false; onExpand?(true)
+    }
+    func reset() { saveConversation(); conversationID = UUID(); showingHistory = false; requestID = UUID(); task?.cancel(); task = nil; messages.removeAll(); input = ""; error = nil; clearScreen(); working = false; onExpand?(false) }
     private func startRequest(_ requestMessages: [ChatMessage]) {
         let id = UUID(); requestID = id
         let diagnosticStart = ProcessInfo.processInfo.systemUptime
@@ -327,7 +379,7 @@ struct DeepSeekProvider {
             LocalDiagnostics.shared.record(.assistant, .complete, diagnosticOutcome, duration: ProcessInfo.processInfo.systemUptime - diagnosticStart, operationID: id)
             guard self.requestID == id else { return }
             if self.error != nil, self.messages.last?.role == "assistant", self.messages.last?.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { self.messages.removeLast() }
-            self.working = false; self.task = nil
+            self.working = false; self.task = nil; self.saveConversation()
         }
     }
     func stop() { task?.cancel() }
