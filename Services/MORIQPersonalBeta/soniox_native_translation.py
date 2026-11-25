@@ -11,6 +11,10 @@ MAX_TEXT_BYTES = 16000
 MAX_OFFSET = (1 << 53) - 1
 
 
+def _language(value):
+    return value.strip().replace('_', '-').lower().split('-', 1)[0] if isinstance(value, str) else ''
+
+
 @dataclass
 class _Lane:
     offset: int = 0
@@ -24,7 +28,8 @@ class NativeTranslationLanes:
     Lanes live for one upstream connection. The receiver owns the session/epoch
     fence and its own history; marker events carry no invented alignment.
     """
-    def __init__(self):
+    def __init__(self, target=None):
+        self.target = target
         self.lanes = {'original': _Lane(), 'translation': _Lane()}
         self.finished = False
 
@@ -75,6 +80,12 @@ class NativeTranslationLanes:
                 saw_draft = {'original': False, 'translation': False}
                 continue
             lane = 'translation' if token.get('translation_status') == 'translation' else 'original'
+            if lane == 'translation' and self.target is not None:
+                # Soniox labels translation tokens with both the output and spoken languages.
+                language = _language(token.get('language'))
+                source = _language(token.get('source_language'))
+                if (language and language != self.target) or source == self.target:
+                    continue
             if token['is_final']:
                 if saw_draft[lane]: raise ValueError('final after provisional token')
                 pending[lane] += text

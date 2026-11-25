@@ -44,10 +44,14 @@ enum StickyNoteGeometry {
         precondition(inMemory)
         file = nil
     }
-    func create() -> UUID? {
+    func create(openOnDesktop: Bool = true) -> UUID? {
         guard canWrite else { return nil }
         let id = UUID()
-        notes.append(StickyNote(id: id, text: "", frame: .zero, isOpen: true)); scheduleSave(); return id
+        notes.append(StickyNote(id: id, text: "", frame: .zero, isOpen: openOnDesktop)); scheduleSave(); return id
+    }
+    func setOpenState(_ open: Bool, id: UUID) {
+        guard canWrite, let i = notes.firstIndex(where: { $0.id == id }), notes[i].isOpen != open else { return }
+        notes[i].isOpen = open; scheduleSave()
     }
     func text(for id: UUID) -> String { notes.first(where: { $0.id == id })?.text ?? "" }
     func updateText(_ text: String, id: UUID) {
@@ -127,6 +131,16 @@ enum StickyNoteGeometry {
         if store.notes.isEmpty { create(); return }
         for note in store.notes { show(note.id, activate: false) }
         NSApp.activate(ignoringOtherApps: true); windows.values.first?.makeKeyAndOrderFront(nil)
+    }
+    func togglePinFromIsland(_ id: UUID) {
+        if let existing = windows[id], existing.isVisible {
+            existing.close()
+        } else if store.notes.first(where: { $0.id == id })?.isOpen == true, windows[id] == nil {
+            store.setOpenState(false, id: id)
+        } else {
+            if !enabled { enable() }
+            show(id, activate: false)
+        }
     }
     private func show(_ id: UUID, activate: Bool) {
         if let window = windows[id] { window.orderFrontRegardless(); if activate { window.makeKeyAndOrderFront(nil) }; return }

@@ -7,6 +7,7 @@ import Speech
 import SwiftUI
 import Translation
 import Combine
+import NaturalLanguage
 
 enum CaptionAudioSource: String, CaseIterable {
     case system
@@ -117,14 +118,77 @@ enum CaptionLanguagePair {
     }
 }
 
+/// A text-only guard for the display. It never changes the recognition
+/// language or restarts the stream when a speaker switches languages.
+enum CaptionOriginalOnly {
+    static func applies(source: String, target: String, original: String) -> Bool {
+        if CaptionLanguagePair.isSame(source, target) { return true }
+        guard CaptionLanguagePair.isSame("zh-CN", target) else { return false }
+        let sample = String(original.suffix(240))
+        let letters = sample.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        let han = letters.filter {
+            (0x3400...0x9FFF).contains($0.value) || (0x20000...0x2FA1F).contains($0.value)
+        }.count
+        guard han >= 6, han * 5 >= letters.count * 4 else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        return (recognizer.languageHypotheses(withMaximum: 2)[.simplifiedChinese] ?? 0) >= 0.80
+    }
+}
+
+/// A second check for older gateways that do not expose provider token labels.
+enum CaptionTranslationLanguage {
+    static func accepted(_ text: String, target: String) -> String {
+        let target = target.lowercased().split(separator: "-").first
+        guard target == "zh" || target == "en" else { return text }
+        var letters = 0, incompatible = 0
+        for scalar in text.unicodeScalars where CharacterSet.letters.contains(scalar) {
+            letters += 1
+            let code = scalar.value
+            let kana = (0x3040...0x30FF).contains(code) || (0xFF66...0xFF9D).contains(code)
+            let hangul = (0xAC00...0xD7AF).contains(code) || (0x1100...0x11FF).contains(code)
+                || (0x3130...0x318F).contains(code)
+            let han = (0x3400...0x9FFF).contains(code) || (0x20000...0x2FA1F).contains(code)
+            if hangul || kana || (target == "en" && han) { incompatible += 1 }
+        }
+        return incompatible > 0 && incompatible * 3 >= letters * 2 ? "" : text
+    }
+}
+
+private enum CaptionPanelDesign {
+    static let inset: CGFloat = 16
+    static let gap: CGFloat = 8
+    static let compactGap: CGFloat = 4
+    static let radius: CGFloat = 16
+    static let controlTarget: CGFloat = 44
+    static let transcriptMinimumHeight: CGFloat = 160
+    static let transcriptMaximumHeight: CGFloat = 352
+    static let transcriptChromeHeight: CGFloat = 104
+    static let textBottomClearance: CGFloat = 4
+    static let edge: CGFloat = 1
+    static let windowWidth: CGFloat = 620
+    static let statusSize: CGFloat = 6
+    static let heading = Font.system(size: 16, weight: .semibold)
+    static let toolbar = Font.system(size: 12, weight: .medium)
+    static let body = Font.system(size: 14)
+    static let metadata = Font.system(size: 11)
+    static func surface(_ dark: Bool) -> Color { Color(white: dark ? 0.105 : 0.98) }
+    static func selection(_ dark: Bool) -> Color {
+        dark ? Color(red: 0.58, green: 0.74, blue: 1) : Color(red: 0.09, green: 0.28, blue: 0.76)
+    }
+}
+
 enum CaptionHistoryVisibility {
     static func lines(_ item: CaptionHistoryEntry, mode: String) -> [String] {
         if item.isIncomplete { return [item.original + "（未完成）"] }
         if item.isNotice || item.languageEvidenceBlocked { return [item.original] }
-        if CaptionLanguagePair.isSame(item.sourceLanguage, item.targetLanguage) { return [item.original] }
+        if CaptionOriginalOnly.applies(source: item.sourceLanguage, target: item.targetLanguage, original: item.original) { return [item.original] }
         var lines: [String] = []
         if mode != "zh" { lines.append(item.original) }
-        if mode != "original" && !item.translated.isEmpty { lines.append(item.translated) }
+        if mode != "original" {
+            let translation = CaptionTranslationLanguage.accepted(item.translated, target: item.targetLanguage)
+            if !translation.isEmpty { lines.append(translation) }
+        }
         return lines
     }
 }
@@ -178,6 +242,7 @@ enum CaptionHistoryVisibility {
     @Published var captionWindowAvailable: CGFloat = 900
     @Published var captionReviewAvailable: CGFloat = 0
     @Published var showHistory = false
+    @Published var transcriptContentHeight: CGFloat = 0
     @Published var isCapturing = false
     @Published var needsSpeechModel = false
     /// Independent provider streams are intentionally not paired into history.
@@ -186,7 +251,7 @@ enum CaptionHistoryVisibility {
     var usesLocalTranslation: Bool { !managedSpeech || !managedSpeechProvidesTranslation }
     #if MORIQ_NATIVE_TRANSLATION_PRODUCT || (DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL)
     struct NativeHistoryEpoch: Identifiable {
-        let id = UUID()
+        var id = UUID()
         let sourceLanguage: String
         let targetLanguage: String
         let original: String
@@ -194,6 +259,7 @@ enum CaptionHistoryVisibility {
         var isNotice = false
     }
     @Published private(set) var nativeActive = false
+    @Published private(set) var nativeOriginalOnly = false
     #if MORIQ_NATIVE_TRANSLATION_PRODUCT
     @Published var reviewSource: CaptionReviewSourceUnit? { didSet { if reviewSource == nil { reviewPanelExpanded = false } } }
     @Published var sourceReviewStatus = ""
@@ -251,6 +317,7 @@ enum CaptionHistoryVisibility {
     private var nativeTranslationRevision: UInt64 = 0
     private var nativeConfirmedBytes = 0
     private var nativeArchivedBytes = 0
+    private var nativeHistoryEpochID = UUID()
     private var nativeSourceLanguage = ""
     private var nativeTargetLanguage = ""
     private let nativeMaximumBytes = 512_000
@@ -263,6 +330,8 @@ enum CaptionHistoryVisibility {
         #endif
         archiveNativeCaption()
         nativeOriginal.reset(); nativeTranslation.reset()
+        nativeOriginalOnly = false
+        nativeHistoryEpochID = UUID()
         nativeOriginalRevision = 0; nativeTranslationRevision = 0
         nativeConfirmedBytes = 0
         nativeSourceLanguage = sourceLanguage; nativeTargetLanguage = targetLanguage
@@ -282,10 +351,14 @@ enum CaptionHistoryVisibility {
                                         revision: nativeOriginalRevision) else { return false }
         case .translation:
             nativeTranslationRevision += 1
-            guard nativeTranslation.append(confirmedDelta: update.confirmedDelta, provisional: update.provisional,
-                                           revision: nativeTranslationRevision) else { return false }
+            guard nativeTranslation.append(
+                confirmedDelta: CaptionTranslationLanguage.accepted(update.confirmedDelta, target: nativeTargetLanguage),
+                provisional: CaptionTranslationLanguage.accepted(update.provisional, target: nativeTargetLanguage),
+                revision: nativeTranslationRevision
+            ) else { return false }
         }
         nativeConfirmedBytes += update.confirmedDelta.utf8.count
+        if update.lane == .original { updateNativeOriginalOnly() }
         return true
     }
     /// Apply validated provider operations to copies, then publish both lanes once.
@@ -302,13 +375,18 @@ enum CaptionHistoryVisibility {
                 guard staged.original.append(confirmedDelta: update.confirmedDelta, provisional: update.provisional, revision: originalRevision) else { return false }
             case .translation:
                 translationRevision += 1
-                guard staged.translation.append(confirmedDelta: update.confirmedDelta, provisional: update.provisional, revision: translationRevision) else { return false }
+                guard staged.translation.append(
+                    confirmedDelta: CaptionTranslationLanguage.accepted(update.confirmedDelta, target: nativeTargetLanguage),
+                    provisional: CaptionTranslationLanguage.accepted(update.provisional, target: nativeTargetLanguage),
+                    revision: translationRevision
+                ) else { return false }
             }
         }
         guard nativeArchivedBytes + nativeConfirmedBytes + added + staged.original.provisional.utf8.count + staged.translation.provisional.utf8.count <= nativeMaximumBytes else { return false }
         nativeOriginalRevision = originalRevision; nativeTranslationRevision = translationRevision
         nativeConfirmedBytes += added
         if !updates.isEmpty { nativeLanes = staged }
+        if updates.contains(where: { $0.lane == .original }) { updateNativeOriginalOnly() }
         return true
     }
     func resizeNativePages(_ capacity: Int) {
@@ -336,7 +414,7 @@ enum CaptionHistoryVisibility {
         guard nativeActive else { return }
         let original = nativeOriginal.confirmed, translation = nativeTranslation.confirmed
         if !original.isEmpty || !translation.isEmpty {
-            nativeHistory.append(NativeHistoryEpoch(sourceLanguage: nativeSourceLanguage, targetLanguage: nativeTargetLanguage,
+            nativeHistory.append(NativeHistoryEpoch(id: nativeHistoryEpochID, sourceLanguage: nativeSourceLanguage, targetLanguage: nativeTargetLanguage,
                                                     original: original, translation: translation))
             nativeArchivedBytes += original.utf8.count + translation.utf8.count
         }
@@ -346,7 +424,7 @@ enum CaptionHistoryVisibility {
     var nativeHistoryForContinuation: [NativeHistoryEpoch] {
         var result = nativeHistory
         if nativeActive && (!nativeOriginal.confirmed.isEmpty || !nativeTranslation.confirmed.isEmpty) {
-            result.append(NativeHistoryEpoch(sourceLanguage: nativeSourceLanguage, targetLanguage: nativeTargetLanguage,
+            result.append(NativeHistoryEpoch(id: nativeHistoryEpochID, sourceLanguage: nativeSourceLanguage, targetLanguage: nativeTargetLanguage,
                                              original: nativeOriginal.confirmed, translation: nativeTranslation.confirmed))
         }
         return result
@@ -377,6 +455,25 @@ enum CaptionHistoryVisibility {
         if previous.isEmpty { return current }
         if current.isEmpty { return previous }
         return previous + "\n" + current
+    }
+    var nativeTranslationForDisplay: String {
+        CaptionTranslationLanguage.accepted(nativeDisplayText(.translation), target: targetLanguage)
+    }
+
+    var nativeSourceOnly: Bool {
+        nativeOriginalOnly || CaptionLanguagePair.isSame(sourceLanguage, targetLanguage)
+    }
+
+    private func updateNativeOriginalOnly() {
+        let originalOnly = CaptionOriginalOnly.applies(source: nativeSourceLanguage, target: nativeTargetLanguage,
+                                                       original: nativeOriginal.visible)
+        if nativeOriginalOnly != originalOnly { nativeOriginalOnly = originalOnly }
+    }
+
+    var nativeDisplayMode: String {
+        if nativeSourceOnly || mode == "original" ||
+            nativeTranslationForDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "original" }
+        return mode == "zh" ? "zh" : "bilingual"
     }
     func disableNativePresentation() { archiveNativeCaption(); nativePresentationSelected = false }
     #endif
@@ -933,6 +1030,7 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         let savedNativeHistory = preserveSession ? state?.nativeHistoryForContinuation ?? [] : []
         #endif
         let savedMode = preserveSession ? state?.mode : nil
+        let savedShowHistory = preserveSession && state?.showHistory == true
         let savedTarget = preserveSession ? state?.targetLanguage : nil
         let savedSize = preserveSession ? state?.fontSize : nil
         let savedFrame = preserveSession ? panel?.frame : nil
@@ -944,7 +1042,9 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
         #if MORIQ_NATIVE_TRANSLATION_PRODUCT || (DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL)
         model.restoreNativeHistory(savedNativeHistory)
         #endif
-        if let savedMode { model.mode = savedMode }; if let savedSize { model.fontSize = savedSize }
+        if let savedMode { model.mode = savedMode }
+        model.showHistory = savedShowHistory
+        if let savedSize { model.fontSize = savedSize }
         showPanel(model, frame: savedFrame)
         let id = UUID(); generation = id
         setup = Task { @MainActor [weak self] in
@@ -1655,17 +1755,24 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
                 NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification, object: panel).map { _ in () },
                 NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification).map { _ in () }
             ).prepend(()))
-            .sink { [weak panel, weak model] combined, _ in
+            .combineLatest(Publishers.CombineLatest3(model.$showHistory, model.$nativeOriginalOnly, model.$transcriptContentHeight))
+            .sink { [weak panel, weak model] snapshot, presentation in
+            let (combined, _) = snapshot
+            let (showHistory, originalOnly, transcriptHeight) = presentation
             let (args, source, target) = combined
             let (expanded, measured, fontSize, mode) = args
             let contentHeight = expanded ? CaptionReviewLayoutPolicy.contentHeight(measured) : 0
-            let effectiveMode = CaptionWindowSizing.effectiveMode(mode: mode, sameLanguage: CaptionLanguagePair.isSame(source, target))
+            let effectiveMode = CaptionWindowSizing.effectiveMode(mode: mode, sameLanguage: originalOnly || CaptionLanguagePair.isSame(source, target))
             guard let panel else { return }
             let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
             let availableReview = min(contentHeight, max(0, visible.height - 196))
             if model?.captionWindowAvailable != visible.height { model?.captionWindowAvailable = visible.height }
             if model?.captionReviewAvailable != availableReview { model?.captionReviewAvailable = availableReview }
-            let height = CaptionWindowSizing.windowHeight(fontSize: fontSize, mode: effectiveMode, review: availableReview, available: visible.height)
+            let historyHeight = min(CaptionPanelDesign.transcriptMaximumHeight,
+                                    max(CaptionPanelDesign.transcriptMinimumHeight,
+                                        transcriptHeight + CaptionPanelDesign.transcriptChromeHeight))
+            let height = showHistory ? min(historyHeight, visible.height)
+                : CaptionWindowSizing.windowHeight(fontSize: fontSize, mode: effectiveMode, review: availableReview, available: visible.height)
             var frame = panel.frame
             let top = frame.maxY
             frame.size.height = height
@@ -2018,30 +2125,33 @@ private final class CaptionAnalyzerBridge: @unchecked Sendable {
 /// upstream translation has no token timestamps and is not sentence-paired.
 private struct NativeCaptionPresentation: View {
     @ObservedObject var state: LiveCaptionState
+
     var body: some View {
         GeometryReader { geometry in
-            Group {
-                if state.showHistory { nativeHistory }
-                else {
-                    VStack(spacing: 4) {
-                        #if DEBUG && MORIQ_SOURCE_UNITS_V2_EXPERIMENTAL
-                        Text(state.debugSourceReviewStatus).font(.caption).foregroundStyle(.secondary)
-                        #endif
-                        if state.mode != "zh" || CaptionLanguagePair.isSame(state.sourceLanguage, state.targetLanguage) {
-                            lane(.original, title: "原文", page: state.nativeOriginal)
-                        }
-                        if state.mode != "original" && !CaptionLanguagePair.isSame(state.sourceLanguage, state.targetLanguage) {
-                            lane(.translation, title: "译文", page: state.nativeTranslation)
-                        }
-                        #if MORIQ_NATIVE_TRANSLATION_PRODUCT
-                        if state.reviewPanelExpanded && state.captionReviewAvailable < 28 {
-                            Text("屏幕空间不足，无法显示校订").font(.caption).foregroundStyle(.secondary)
-                        } else if !state.sourceReviewStatus.isEmpty {
-                            Text(state.sourceReviewStatus).font(.caption).foregroundStyle(.secondary)
-                        }
-                        #endif
-                    }
+            VStack(spacing: CaptionPanelDesign.compactGap) {
+                #if DEBUG && MORIQ_SOURCE_UNITS_V2_EXPERIMENTAL
+                Text(state.debugSourceReviewStatus).font(.caption).foregroundStyle(.secondary)
+                #endif
+                if state.nativeDisplayMode != "zh" {
+                    NativeCaptionLane(state: state, lane: .original, title: "原文",
+                                      labeled: state.nativeDisplayMode == "bilingual", page: state.nativeOriginal)
                 }
+                if state.nativeDisplayMode != "original" {
+                    NativeCaptionLane(state: state, lane: .translation, title: "译文",
+                                      labeled: state.nativeDisplayMode == "bilingual", page: state.nativeTranslation)
+                }
+                #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
+                if state.nativeDisplayMode != "original" && state.experimentalAutomaticMode && state.experimentalAutomaticFailure {
+                    Text("部分译文暂不可用").font(CaptionPanelDesign.metadata).foregroundStyle(.secondary)
+                }
+                #endif
+                #if MORIQ_NATIVE_TRANSLATION_PRODUCT
+                if state.reviewPanelExpanded && state.captionReviewAvailable < 28 {
+                    Text("屏幕空间不足，无法显示校订").font(.caption).foregroundStyle(.secondary)
+                } else if !state.sourceReviewStatus.isEmpty {
+                    Text(state.sourceReviewStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                #endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear { resize(width: geometry.size.width) }
@@ -2050,50 +2160,7 @@ private struct NativeCaptionPresentation: View {
         }
     }
     private func resize(width: CGFloat) {
-        // Reserve the fixed label and navigation widths used by the lane.
         state.resizeNativePages(width: max(20, width - 96))
-    }
-    private func lane(_ lane: ManagedNativeLane, title: String, page: CaptionLanePages) -> some View {
-        NativeCaptionLane(state: state, lane: lane, title: title, page: page)
-    }
-    private var nativeHistory: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(state.nativeHistory) { epoch in
-                    if epoch.isNotice { Text(epoch.original).foregroundStyle(.secondary) }
-                    else {
-                        historyLane("原文 · \(epoch.sourceLanguage)", epoch.original)
-                        #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
-                        historyLane("译文 · \(epoch.targetLanguage)", state.experimentalAutomaticMode ? "" : epoch.translation)
-                        #else
-                        historyLane("译文 · \(epoch.targetLanguage)", epoch.translation)
-                        #endif
-                    }
-                }
-                if state.nativeActive {
-                    historyLane("原文 · 当前", state.nativeOriginal.confirmed)
-                    #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
-                    historyLane("译文 · 当前", state.experimentalAutomaticMode ? state.experimentalAutomaticText : state.nativeTranslation.confirmed)
-                    #else
-                    historyLane("译文 · 当前", state.nativeTranslation.confirmed)
-                    #endif
-                }
-                if state.nativeHistory.isEmpty && state.nativeOriginal.confirmed.isEmpty && state.nativeTranslation.confirmed.isEmpty {
-                    Text("暂无已确认的字幕").foregroundStyle(.secondary)
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }.font(.caption)
-    }
-    private func historyLane(_ title: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).foregroundStyle(.secondary)
-                Spacer()
-                Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
-                    .buttonStyle(.plain).disabled(text.isEmpty)
-            }
-            Text(text.isEmpty ? "—" : text).textSelection(.enabled)
-        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -2101,40 +2168,34 @@ private struct NativeCaptionLane: View {
     @ObservedObject var state: LiveCaptionState
     let lane: ManagedNativeLane
     let title: String
+    let labeled: Bool
     let page: CaptionLanePages
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var fittedFontSize: CGFloat {
-        let mode = CaptionWindowSizing.effectiveMode(mode: state.mode, sameLanguage: CaptionLanguagePair.isSame(state.sourceLanguage, state.targetLanguage))
+        let mode = state.nativeDisplayMode
         let content = max(0, state.captionWindowAvailable - 66 - state.captionReviewAvailable)
         return CaptionWindowSizing.fittedFontSize(requested: state.fontSize, mode: mode, availableContent: content)
     }
     var body: some View {
-        let shown = page.visible
-        #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
-        let displayed = lane == .translation && state.experimentalAutomaticMode ? state.experimentalAutomaticText : (page.followsLatest ? state.nativeDisplayText(lane) : shown)
-        #else
-        let displayed = page.followsLatest ? state.nativeDisplayText(lane) : shown
-        #endif
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
-                if lane == .translation && state.experimentalAutomaticMode && state.experimentalAutomaticFailure {
-                    Text("部分译文暂不可用").font(.system(size: 10)).foregroundStyle(.secondary).fixedSize()
-                }
-                #endif
+        let displayed: String = {
+            if lane == .translation {
+                return page.followsLatest
+                    ? state.nativeTranslationForDisplay
+                    : CaptionTranslationLanguage.accepted(page.visible, target: state.targetLanguage)
             }
-            #if (MORIQ_AUTO_TRANSLATION_PRODUCT && MORIQ_NATIVE_TRANSLATION_PRODUCT) || (DEBUG && MORIQ_AUTO_TRANSLATION_EXPERIMENTAL)
-            .frame(width: lane == .translation && state.experimentalAutomaticMode && state.experimentalAutomaticFailure ? 80 : 24, alignment: .leading)
-            #else
-            .frame(width: 24, alignment: .leading)
-            #endif
-            .padding(.top, 4)
+            return page.followsLatest ? state.nativeDisplayText(lane) : page.visible
+        }()
+        HStack(alignment: .top, spacing: CaptionPanelDesign.gap) {
+            if labeled {
+                Text(title).font(CaptionPanelDesign.metadata)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, CaptionPanelDesign.compactGap)
+            }
             CaptionContinuousViewport(text: displayed,
                                       fontSize: lane == .original ? fittedFontSize : max(6, fittedFontSize - 2),
                                       reduceMotion: reduceMotion, followsLatest: page.followsLatest)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                 .accessibilityLabel("\(title)：\(displayed)")
+                 .accessibilityLabel(labeled ? "\(title)：\(displayed)" : displayed)
             HStack(spacing: 4) {
                 if page.hasPrevious || page.hasNext || !page.followsLatest {
                     Button { state.previousNativePage(lane) } label: { Image(systemName: "chevron.left") }
@@ -2244,7 +2305,10 @@ private final class CaptionTextViewport: NSView {
             }
         }
         if let first = lines.first {
-            scroll.frame.size.height = min(bounds.height, ceil(first.0.height * 2))
+            let visibleLines = lines.suffix(2)
+            let measuredHeight = (visibleLines.last?.0.maxY ?? 0) - (visibleLines.first?.0.minY ?? 0)
+            let viewportHeight = max(first.0.height * 2, measuredHeight) + CaptionPanelDesign.textBottomClearance
+            scroll.frame.size.height = min(bounds.height, ceil(viewportHeight))
         }
         // Using the taller outer lane creates empty scrollable space below a
         // two-line document; AppKit can then auto-scroll that space into view
@@ -2253,7 +2317,8 @@ private final class CaptionTextViewport: NSView {
         // line so the last two-line anchor remains reachable without exposing
         // a clipped sliver of the preceding line.
         let fullLastLineBottom = lines.last.map { $0.0.minY + (lines.first?.0.height ?? $0.0.height) } ?? 0
-        textView.frame.size.height = max(scroll.contentView.bounds.height, ceil(used.maxY), ceil(fullLastLineBottom))
+        textView.frame.size.height = max(scroll.contentView.bounds.height,
+                                        ceil(max(used.maxY, fullLastLineBottom) + CaptionPanelDesign.textBottomClearance))
         let maxY = max(0, textView.frame.height - scroll.contentView.bounds.height)
         let topLines = Array(lines.prefix(max(1, lines.count - 1)))
         let anchors = topLines.map { CaptionScrollScheduler.Anchor(id: String($0.1), y: Double(min(max(0, $0.0.minY), maxY))) }
@@ -2335,9 +2400,79 @@ private struct CaptionPanelDragHandle: NSViewRepresentable {
     func updateNSView(_ view: DragView, context: Context) {}
 }
 
-private struct LiveCaptionView: View {
+private struct CaptionRecord: Identifiable {
+    let id: UUID
+    let lines: [String]
+    let notice: Bool
+
+    var copyText: String { lines.joined(separator: "\n") }
+}
+
+private struct CaptionTranscriptView<Accessory: View>: View {
+    let records: [CaptionRecord]
+    let accessory: (UUID) -> Accessory
+    let resize: (CGFloat) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CaptionPanelDesign.gap) {
+            HStack {
+                Text("字幕记录").font(CaptionPanelDesign.heading)
+                Spacer()
+                if !records.isEmpty {
+                    Button("复制全部") { copy(records.filter { !$0.notice }.map(\.copyText).joined(separator: "\n\n")) }
+                        .buttonStyle(.plain)
+                        .font(CaptionPanelDesign.toolbar)
+                        .disabled(records.allSatisfy { $0.notice })
+                }
+            }
+            if records.isEmpty {
+                Text("暂无字幕记录")
+                    .font(CaptionPanelDesign.body)
+                    .foregroundStyle(.secondary)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: CaptionPanelDesign.inset) {
+                        ForEach(records) { record in
+                            VStack(alignment: .leading, spacing: CaptionPanelDesign.compactGap) {
+                                ForEach(Array(record.lines.enumerated()), id: \.offset) { index, line in
+                                    Text(line).foregroundStyle(record.notice || index > 0 ? .secondary : .primary)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                accessory(record.id)
+                            }
+                            .accessibilityElement(children: .contain)
+                            .contextMenu {
+                                if !record.notice { Button("复制这段字幕") { copy(record.copyText) } }
+                            }
+                        }
+                    }
+                    .padding(.bottom, CaptionPanelDesign.gap)
+                }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    ceil(geometry.contentSize.height / CaptionPanelDesign.gap) * CaptionPanelDesign.gap
+                } action: { _, contentHeight in
+                    resize(contentHeight)
+                }
+                .font(CaptionPanelDesign.body)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func copy(_ text: String) {
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+struct LiveCaptionView: View {
     @ObservedObject var state: LiveCaptionState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let close: () -> Void
     let installModel: () -> Void
     let changeLanguage: (String) -> Void
@@ -2386,7 +2521,33 @@ private struct LiveCaptionView: View {
         if state.history.last?.id == state.segmentID { return Array(state.history.dropLast()) }
         return state.history
     }
-    private var sourceMatchesTarget: Bool { CaptionLanguagePair.isSame(state.sourceLanguage, state.targetLanguage) }
+    private var sourceMatchesTarget: Bool {
+        if usesNativeCaptionPresentation {
+            #if MORIQ_NATIVE_TRANSLATION_PRODUCT || (DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL)
+            return state.nativeSourceOnly
+            #endif
+        }
+        return CaptionOriginalOnly.applies(source: state.sourceLanguage, target: state.targetLanguage, original: state.original)
+    }
+    private var records: [CaptionRecord] {
+        #if MORIQ_NATIVE_TRANSLATION_PRODUCT || (DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL)
+        if state.nativePresentationSelected {
+            return state.nativeHistoryForContinuation.compactMap { entry in
+                let item = CaptionHistoryEntry(id: entry.id, original: entry.original, sourceLanguage: entry.sourceLanguage,
+                                               targetLanguage: entry.targetLanguage, translated: entry.translation,
+                                               isNotice: entry.isNotice)
+                return record(item)
+            }
+        }
+        #endif
+        return state.history.compactMap(record)
+    }
+    private func record(_ item: CaptionHistoryEntry) -> CaptionRecord? {
+        let lines = CaptionHistoryVisibility.lines(item, mode: "bilingual")
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !lines.isEmpty else { return nil }
+        return CaptionRecord(id: item.id, lines: lines, notice: item.isNotice)
+    }
     private var usesNativeCaptionPresentation: Bool {
         #if MORIQ_NATIVE_TRANSLATION_PRODUCT || (DEBUG && MORIQ_NATIVE_TRANSLATION_EXPERIMENTAL)
         return state.nativePresentationSelected
@@ -2403,35 +2564,66 @@ private struct LiveCaptionView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Circle().fill(state.isCapturing ? Color(red: 0.18, green: 0.43, blue: 1) : Color.secondary.opacity(0.6)).frame(width: 6, height: 6)
-                Text(state.isCapturing && state.status == "正在处理系统音频 · 本机识别" ? "正在聆听" : state.status)
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            HStack(spacing: CaptionPanelDesign.gap) {
+                let listening = state.isCapturing && !state.needsSpeechModel &&
+                    (state.status.hasPrefix("正在向语音服务发送") || state.status.hasPrefix("正在处理系统音频"))
+                Circle().fill(listening ? CaptionPanelDesign.selection(colorScheme == .dark) : Color.secondary)
+                    .frame(width: CaptionPanelDesign.statusSize, height: CaptionPanelDesign.statusSize)
+                Text(listening ? "正在聆听" : state.status)
+                    .font(CaptionPanelDesign.toolbar).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail).help(state.status)
                 #if DEBUG && MORIQ_SPEAKER_EXPERIMENTAL
                 if state.experimentalSpeakerEnabled { Text("实验").font(.system(size: 10)).foregroundStyle(.secondary) }
                 #endif
                 CaptionPanelDragHandle().frame(maxWidth: .infinity).frame(height: 26)
                 if state.needsSpeechModel { Button("重试", action: installModel).buttonStyle(.plain).font(.system(size: 11, weight: .medium)).help("重新启动字幕") }
-                Menu {
-                    Picker("语音语言", selection: $state.sourceLanguage) {
-                        #if DEBUG && MORIQ_AUTO_LANGUAGE_EXPERIMENTAL
-                        if ProcessInfo.processInfo.environment["MORIQ_AUTO_LANGUAGE_EXPERIMENTAL"] == "1" { Text("自动（实验）").tag("auto") }
-                        #endif
-                        Text("英语").tag("en-US"); Text("中文").tag("zh-CN"); Text("日语").tag("ja-JP"); Text("韩语").tag("ko-KR")
+                if !state.showHistory {
+                    Menu {
+                        Section("语音语言") {
+                            #if DEBUG && MORIQ_AUTO_LANGUAGE_EXPERIMENTAL
+                            if ProcessInfo.processInfo.environment["MORIQ_AUTO_LANGUAGE_EXPERIMENTAL"] == "1" {
+                                captionChoice("自动（实验）", value: "auto", selection: $state.sourceLanguage)
+                            }
+                            #endif
+                            captionChoice("英语", value: "en-US", selection: $state.sourceLanguage)
+                            captionChoice("中文", value: "zh-CN", selection: $state.sourceLanguage)
+                            captionChoice("日语", value: "ja-JP", selection: $state.sourceLanguage)
+                            captionChoice("韩语", value: "ko-KR", selection: $state.sourceLanguage)
+                        }
+                        Section("翻译语言") {
+                            captionChoice("中文", value: "zh-Hans", selection: $state.targetLanguage)
+                            captionChoice("英语", value: "en-US", selection: $state.targetLanguage)
+                        }
+                    } label: {
+                        captionMenuLabel(sourceMatchesTarget ? targetLanguageName : "\(languageName) → \(targetLanguageName)")
                     }
-                    Picker("翻译语言", selection: $state.targetLanguage) { Text("中文").tag("zh-Hans"); Text("英语").tag("en-US") }
-                } label: { HStack(spacing: 4) { Text("\(languageName) → \(targetLanguageName)"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择语音与翻译语言").accessibilityLabel("语音语言，\(languageName)，翻译语言，\(targetLanguageName)")
-                Menu {
-                    Picker("字幕模式", selection: $state.mode) { Text("双语").tag("bilingual"); Text("原文").tag("original"); Text("译文").tag("zh") }
-                } label: { HStack(spacing: 4) { Text(modeName); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) } }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择字幕模式").accessibilityLabel("字幕模式，\(modeName)")
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("选择语音与翻译语言")
+                    .accessibilityLabel("语音语言，\(languageName)，翻译语言，\(targetLanguageName)")
+                    if !sourceMatchesTarget {
+                        Menu {
+                            captionChoice("双语", value: "bilingual", selection: $state.mode)
+                            captionChoice("原文", value: "original", selection: $state.mode)
+                            captionChoice("译文", value: "zh", selection: $state.mode)
+                        } label: { captionMenuLabel(modeName) }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .help("选择字幕模式").accessibilityLabel("字幕模式，\(modeName)")
+                    }
+                }
                 Button {
                     state.showHistory.toggle()
                     #if MORIQ_NATIVE_TRANSLATION_PRODUCT
                     if state.showHistory { state.reviewPanelExpanded = false }
                     #endif
-                } label: { Image(systemName: "clock.arrow.circlepath").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(state.showHistory ? Color.accentColor : Color.secondary).help("字幕记录").accessibilityLabel("字幕记录")
+                } label: {
+                    if state.showHistory { Label("返回实时", systemImage: "arrow.left") }
+                    else { Image(systemName: "clock").frame(width: CaptionPanelDesign.controlTarget) }
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: CaptionPanelDesign.controlTarget)
+                .foregroundStyle(state.showHistory ? CaptionPanelDesign.selection(colorScheme == .dark) : .secondary)
+                .help(state.showHistory ? "返回实时字幕" : "字幕记录")
+                .accessibilityLabel(state.showHistory ? "返回实时字幕" : "字幕记录")
                 #if MORIQ_NATIVE_TRANSLATION_PRODUCT
                 if state.reviewSource != nil, !state.showHistory,
                    let recipient = Bundle.main.object(forInfoDictionaryKey: "MORIQCaptionReviewRecipient") as? String, !recipient.isEmpty,
@@ -2446,20 +2638,25 @@ private struct LiveCaptionView: View {
                     .buttonStyle(.plain).help("打开仅使用模拟数据的校订实验")
                     .accessibilityIdentifier("caption-review-entry")
                 #endif
-                Button(action: close) { Image(systemName: "xmark").frame(width: 22, height: 24).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("停止字幕").accessibilityLabel("停止字幕")
+                Button(action: close) { Image(systemName: "xmark").frame(width: CaptionPanelDesign.controlTarget, height: CaptionPanelDesign.controlTarget).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary).help("停止字幕").accessibilityLabel("停止字幕")
             }
-            .font(.system(size: 11, weight: .medium))
-            .frame(height: 26)
-            Color.clear.frame(height: 6)
+            .font(CaptionPanelDesign.toolbar)
+            .frame(height: CaptionPanelDesign.controlTarget)
+            Color.clear.frame(height: CaptionPanelDesign.gap)
             if isCaptionReviewDiagnosticVisible {
                 #if DEBUG && MORIQ_CAPTION_REVIEW_EXPERIMENTAL
                 ExperimentalCaptionReviewPanel { showCaptionReviewDiagnostic = false }
                 #else
                 EmptyView()
                 #endif
+            } else if state.showHistory {
+                CaptionTranscriptView(records: records, accessory: transcriptAccessory) { height in
+                    let bounded = min(height, CaptionPanelDesign.transcriptMaximumHeight)
+                    if state.transcriptContentHeight != bounded { state.transcriptContentHeight = bounded }
+                }
             } else if usesNativeCaptionPresentation {
                 VStack(spacing: 0) {
-                    let actualMode = CaptionWindowSizing.effectiveMode(mode: state.mode, sameLanguage: CaptionLanguagePair.isSame(state.sourceLanguage, state.targetLanguage))
+                    let actualMode = sourceMatchesTarget || state.mode == "original" ? "original" : state.mode
                     let availableContent = max(0, state.captionWindowAvailable - 66 - state.captionReviewAvailable)
                     if CaptionWindowSizing.canFit(mode: actualMode, availableContent: availableContent) {
                         nativeCaptionPresentation.frame(height: min(availableContent, CaptionWindowSizing.nativeHeight(fontSize: CaptionWindowSizing.fittedFontSize(requested: state.fontSize, mode: actualMode, availableContent: availableContent), mode: actualMode)))
@@ -2489,31 +2686,6 @@ private struct LiveCaptionView: View {
                     }
                     #endif
                 }
-            } else if state.showHistory {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(state.history) { item in
-                            HStack {
-                                Text((item.isIncomplete ? item.original + "（未完成）" : item.original) + (item.translated.isEmpty ? "" : "\n" + item.translated)).textSelection(.enabled)
-                                Spacer()
-                                #if DEBUG && MORIQ_AUTO_LANGUAGE_EXPERIMENTAL
-                                if state.experimentalCanSelectLanguage(item.id) {
-                                    Menu {
-                                        Button("英语") { state.recoverExperimentalLanguage(segment: item.id, language: "en-US") }
-                                        Button("中文") { state.recoverExperimentalLanguage(segment: item.id, language: "zh-CN") }
-                                        Button("日语") { state.recoverExperimentalLanguage(segment: item.id, language: "ja-JP") }
-                                        Button("韩语") { state.recoverExperimentalLanguage(segment: item.id, language: "ko-KR") }
-                                    } label: { Text(item.languageEvidenceBlocked ? "选择语言" : "更正语言") }
-                                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("为此句选择语言")
-                                    if let message = state.experimentalErrors[item.id] { Text(message).foregroundStyle(.secondary) }
-                                }
-                                #endif
-                                Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.translated.isEmpty ? item.original : item.original + "\n" + item.translated, forType: .string) }.buttonStyle(.plain)
-                            }
-                        }
-                        if state.history.isEmpty { Text("暂无已完成的字幕").foregroundStyle(.secondary) }
-                    }
-                }.font(.caption)
             } else {
                 ScrollViewReader { scroll in
                     ScrollView {
@@ -2527,7 +2699,7 @@ private struct LiveCaptionView: View {
                                 if state.original.isEmpty && state.unanchoredPreview.isEmpty {
                                     Text("等待语音").font(.system(size: 15)).foregroundStyle(.secondary)
                                 } else if !state.original.isEmpty {
-                                    if state.mode != "zh" || sourceMatchesTarget || state.languageEvidenceBlocked { Text(visibleOriginal).font(.system(size: state.fontSize, weight: .medium)).foregroundStyle(.primary) }
+                                    if state.mode != "zh" || sourceMatchesTarget || state.languageEvidenceBlocked || visibleTranslation.isEmpty { Text(visibleOriginal).font(.system(size: state.fontSize, weight: .medium)).foregroundStyle(.primary) }
                                     if state.mode != "original" && !sourceMatchesTarget && !visibleTranslation.isEmpty { Text(visibleTranslation).font(.system(size: state.fontSize - 2)).foregroundStyle(.secondary) }
                                     #if DEBUG && MORIQ_AUTO_LANGUAGE_EXPERIMENTAL
                                     if state.mode != "original" && !state.experimentalPreviewTranslation.isEmpty {
@@ -2614,13 +2786,19 @@ private struct LiveCaptionView: View {
                 }
             }
             Spacer(minLength: 6)
-        }.padding(.horizontal, 18).padding(.vertical, 12).frame(width: 620).frame(maxHeight: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
-            }
+        }
+        .padding(.horizontal, CaptionPanelDesign.inset)
+        .padding(.bottom, CaptionPanelDesign.gap)
+        .frame(width: CaptionPanelDesign.windowWidth).frame(maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: CaptionPanelDesign.radius)
+                .fill(CaptionPanelDesign.surface(colorScheme == .dark))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: CaptionPanelDesign.radius)
+                .strokeBorder(.primary.opacity(0.09), lineWidth: CaptionPanelDesign.edge)
+                .allowsHitTesting(false)
+        }
         .onChange(of: state.revision) { _, _ in scheduleTranslation() }
         .task(id: state.original) { await reveal(state.original, into: $visibleOriginal) }
         .task(id: state.translated) { await reveal(state.translated, into: $visibleTranslation) }
@@ -2693,6 +2871,39 @@ private struct LiveCaptionView: View {
             try? await Task.sleep(for: .milliseconds(20))
         }
     }
+    @ViewBuilder private func transcriptAccessory(_ id: UUID) -> some View {
+        #if DEBUG && MORIQ_AUTO_LANGUAGE_EXPERIMENTAL
+        if state.experimentalCanSelectLanguage(id) {
+            Menu {
+                Button("英语") { state.recoverExperimentalLanguage(segment: id, language: "en-US") }
+                Button("中文") { state.recoverExperimentalLanguage(segment: id, language: "zh-CN") }
+                Button("日语") { state.recoverExperimentalLanguage(segment: id, language: "ja-JP") }
+                Button("韩语") { state.recoverExperimentalLanguage(segment: id, language: "ko-KR") }
+            } label: {
+                Text(state.history.first(where: { $0.id == id })?.languageEvidenceBlocked == true ? "选择语言" : "更正语言")
+            }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("为此句选择语言")
+            if let message = state.experimentalErrors[id] { Text(message).foregroundStyle(.secondary) }
+        }
+        #else
+        EmptyView()
+        #endif
+    }
+
+    private func captionMenuLabel(_ title: String) -> some View {
+        HStack(spacing: CaptionPanelDesign.compactGap) {
+            Text(title)
+            Image(systemName: "chevron.down").font(CaptionPanelDesign.metadata).foregroundStyle(.secondary)
+        }
+    }
+
+    private func captionChoice(_ title: String, value: String, selection: Binding<String>) -> some View {
+        Button { selection.wrappedValue = value } label: {
+            if selection.wrappedValue == value { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
+        }
+    }
+
     private func restartTranslation() {
         debounce?.cancel(); debounce = nil; translationRequestID = UUID(); translationInFlight = false; configuration = nil
         if state.status == "语音与翻译语言相同，请选择不同语言。" {

@@ -7,6 +7,10 @@ MainActor.assumeIsolated {
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
     let model = IslandPreviewContent(defaults: defaults)
+    for module in IslandModule.allCases {
+        model.setEnabled(module, module == .shelf || module == .clipboard)
+    }
+    model.select(.shelf)
     model.contents[.shelf] = ["fixture shelf"]
     model.contents[.clipboard] = ["fixture clipboard"]
     let panel = NSPanel(contentRect: NSRect(x: -10000, y: -10000, width: 460, height: 280), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)

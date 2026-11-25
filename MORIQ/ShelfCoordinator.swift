@@ -457,19 +457,9 @@ struct ShelfView: View {
                         ScrollView {
                             LazyVStack(spacing: 3) {
                                 ForEach(store.items) { item in
-                                    ShelfItemRow(item: item, selected: selected.contains(item.id), dragURLs: store.items.filter { selected.contains($0.id) }.map(\.url), select: { flags in
-                                        transferError = nil
-                                        selectionFocus = item.id
-                                        if flags.contains(.shift), let anchor = selectionAnchor,
-                                           let start = store.items.firstIndex(where: { $0.id == anchor }),
-                                           let end = store.items.firstIndex(where: { $0.id == item.id }) {
-                                            let range = min(start, end)...max(start, end)
-                                            let ids = Set(store.items[range].map(\.id))
-                                            selected = flags.contains(.command) ? selected.union(ids) : ids
-                                        } else {
-                                            if selected.contains(item.id) { selected.remove(item.id) } else { selected.insert(item.id) }
-                                            selectionAnchor = item.id
-                                        }
+                                    let dragURLs: [URL] = store.items.compactMap { selected.contains($0.id) ? $0.url : nil }
+                                    ShelfItemRow(item: item, selected: selected.contains(item.id), dragURLs: dragURLs, select: { flags in
+                                        handleRowClick(item: item, flags: flags)
                                     }, selectForDrag: {
                                         selected = [item.id]; selectionAnchor = item.id; selectionFocus = item.id; transferError = nil
                                     }, selectAll: { selected = Set(store.items.map(\.id)) }, moveSelection: { direction, extend in moveSelection(from: item.id, direction: direction, extend: extend) }, copySelection: copySelection, dragState: { state.exporting = $0 }, transferFailure: { transferError = "部分文件不可用，请先取消选择" }, remove: { selected.remove(item.id); store.remove(item.id) })
@@ -542,6 +532,30 @@ struct ShelfView: View {
             if let anchor = selectionAnchor, !ids.contains(anchor) { selectionAnchor = nil }
             if let focus = selectionFocus, !ids.contains(focus) { selectionFocus = nil }
             transferError = nil
+        }
+    }
+
+    private func handleRowClick(item: ShelfEntry, flags: NSEvent.ModifierFlags) {
+        transferError = nil
+        selectionFocus = item.id
+        if flags.contains(.shift),
+           let anchor = selectionAnchor,
+           let start = store.items.firstIndex(where: { $0.id == anchor }),
+           let end = store.items.firstIndex(where: { $0.id == item.id }) {
+            let lower = min(start, end)
+            let upper = max(start, end)
+            var ids = Set<UUID>()
+            for idx in lower...upper {
+                ids.insert(store.items[idx].id)
+            }
+            selected = flags.contains(.command) ? selected.union(ids) : ids
+        } else {
+            if selected.contains(item.id) {
+                selected.remove(item.id)
+            } else {
+                selected.insert(item.id)
+            }
+            selectionAnchor = item.id
         }
     }
 }

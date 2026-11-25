@@ -394,7 +394,7 @@ class SonioxGateway:
                                 else: raise ValueError('invalid client message')
                         async def download():
                             nonlocal metric_outcome
-                            snapshots=NativeTranslationLanes() if native_mode else TokenSnapshots()
+                            snapshots=NativeTranslationLanes(target=config['target']) if native_mode else TokenSnapshots()
                             batch_seq=0;auto_seen=0;auto_attempts=0;previous_auto=None;auto_order=0;punct_degraded=False
                             confirmed_source=''
                             if punct_units:

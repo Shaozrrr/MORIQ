@@ -537,12 +537,20 @@ private final class ClipboardCaptureBuffer: @unchecked Sendable {
             let window = ClipboardPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 340), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true; window.level = .floating; window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.dismiss = { [weak self] in self?.previousApp?.activate(options: []) }
-            window.contentView = NSHostingView(rootView: ClipboardView(store: store, choose: { [weak window, weak self] entry, plain in
-                guard let self, self.store.copy(entry, plain: plain) else { return }
-                window?.orderOut(nil); self.previousApp?.activate(options: [])
-            }))
+            window.contentView = NSHostingView(rootView: ClipboardView(
+                store: store,
+                choose: { [weak window, weak self] entry, plain in
+                    guard let self, self.store.copy(entry, plain: plain) else { return }
+                    window?.orderOut(nil); self.previousApp?.activate(options: [])
+                },
+                close: { [weak window, weak self] in
+                    window?.orderOut(nil); self?.previousApp?.activate(options: [])
+                }
+            ))
             panel = window
         }
+        let prefersDark = UserDefaults.standard.bool(forKey: "moriq.permissionDarkMode")
+        panel?.appearance = NSAppearance(named: prefersDark ? .darkAqua : .aqua)
         let point = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main {
             let f = screen.visibleFrame; panel?.setFrameOrigin(NSPoint(x: min(max(point.x - 200, f.minX), f.maxX - 400), y: min(max(point.y - 170, f.minY), f.maxY - 340)))
@@ -558,6 +566,7 @@ final class ClipboardPanel: NSPanel {
 struct ClipboardView: View {
     @ObservedObject var store: ClipboardStore
     let choose: (ClipboardEntry, Bool) -> Void
+    var close: (() -> Void)? = nil
     @State private var search = ""
     @State private var selected = 0
     @State private var showFavorites = false
@@ -568,13 +577,24 @@ struct ClipboardView: View {
     }
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 20) {
+            HStack(spacing: 18) {
                 Button("历史") { showFavorites = false; selected = 0 }
                     .foregroundStyle(showFavorites ? Color.secondary : Color.accentColor)
                 Button("收藏") { showFavorites = true; selected = 0 }
                     .foregroundStyle(showFavorites ? Color.accentColor : Color.secondary)
                 Spacer()
-                Text("点击即可复制").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("点击复制 · Esc 收起").font(.system(size: 10)).foregroundStyle(.secondary)
+                if let close {
+                    Button(action: close) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .background(Color.primary.opacity(0.06), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭剪贴板浮层")
+                }
             }.buttonStyle(.plain).font(.system(size: 12, weight: .medium))
             TextField("搜索剪贴板", text: $search).textFieldStyle(.roundedBorder).focused($focused)
                 .onChange(of: search) { _, _ in selected = 0 }
