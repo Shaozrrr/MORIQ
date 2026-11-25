@@ -745,7 +745,6 @@ struct BentoWidgetTileView: View {
             .padding(11)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         case "rings_2x1":
             HStack(spacing: 6) {
@@ -784,7 +783,6 @@ struct BentoWidgetTileView: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         case "bars_2x1":
             VStack(alignment: .leading, spacing: 8) {
@@ -823,7 +821,6 @@ struct BentoWidgetTileView: View {
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         case "square_2x2":
             VStack(alignment: .leading, spacing: 6) {
@@ -865,7 +862,6 @@ struct BentoWidgetTileView: View {
             .padding(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: 20)
-            .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         default: // banner_4x1
             HStack(spacing: 8) {
@@ -927,7 +923,6 @@ struct BentoWidgetTileView: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.system) }
         }
     }
 
@@ -1044,10 +1039,6 @@ struct BentoWidgetTileView: View {
             .padding(.horizontal, 11).padding(.vertical, 9)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
-            .onTapGesture {
-                telemetry.activeSystemDetailTab = .power
-                bentoStore.onNavigateModule?(.system)
-            }
         }
     }
 
@@ -1145,10 +1136,6 @@ struct BentoWidgetTileView: View {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture {
-                telemetry.activeSystemDetailTab = .network
-                bentoStore.onNavigateModule?(.system)
-            }
         }
     }
 
@@ -1371,7 +1358,6 @@ struct BentoWidgetTileView: View {
             .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.aiDev) }
         } else {
             let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
             VStack(alignment: .leading, spacing: 7) {
@@ -1398,7 +1384,6 @@ struct BentoWidgetTileView: View {
             .padding(11)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
-            .onTapGesture { bentoStore.onNavigateModule?(.aiDev) }
         }
     }
 
@@ -1414,7 +1399,6 @@ struct BentoWidgetTileView: View {
             .padding(9)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.aiDev) }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -1478,7 +1462,6 @@ struct BentoWidgetTileView: View {
             .padding(9)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.calendar) }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -1527,7 +1510,6 @@ struct BentoWidgetTileView: View {
             .padding(11)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
-            .onTapGesture { bentoStore.onNavigateModule?(.calendar) }
         }
     }
 
@@ -1545,7 +1527,6 @@ struct BentoWidgetTileView: View {
             .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
-            .onTapGesture { bentoStore.onNavigateModule?(.calendar) }
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -1627,7 +1608,7 @@ struct BentoWidgetTileView: View {
     }
 
     @ViewBuilder private var musicView: some View {
-        Button { bentoStore.onNavigateModule?(.music) } label: {
+        Button { } label: {
             if variant.w == 1 {
                 VStack(spacing: 3) {
                     Circle().fill(Color(red: 0.08, green: 0.09, blue: 0.13)).frame(width: 34, height: 34)
@@ -1655,7 +1636,7 @@ struct BentoWidgetTileView: View {
 
     @ViewBuilder private var shelfView: some View {
         let count = bentoStore.shelfItemCountProvider?() ?? 0
-        Button { bentoStore.onNavigateModule?(.shelf) } label: {
+        Button { } label: {
             if variant.w == 1 {
                 VStack(alignment: .leading, spacing: 2) {
                     Image(systemName: "tray.full.fill").font(.system(size: 12)).foregroundStyle(LiquidGlassPalette.sapphire)

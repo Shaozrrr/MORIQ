@@ -12,7 +12,7 @@ enum IslandModule: String, Codable, CaseIterable, Identifiable {
         case .system: "算力"
         case .control: "控制"
         case .toolkit: "效率"
-        case .aiDev: "AI开发"
+        case .aiDev: "AI"
         case .focus: "专注"
         case .music: "音乐"
         case .clipboard: "剪贴板"
