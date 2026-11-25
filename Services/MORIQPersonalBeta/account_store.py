@@ -177,9 +177,9 @@ class AccountStore:
                 row=db.execute('SELECT reserved_tokens,settled_tokens FROM token_reservations WHERE request_id=? AND account_id=?',(request_id,session.account)).fetchone()
                 if row is None or row[1] is not None:
                     db.execute('ROLLBACK');return False
-                if actual_tokens>row[0]:
-                    db.execute("INSERT OR REPLACE INTO token_budget_halt VALUES(1,'usage_exceeded_reservation')")
-                    db.execute('COMMIT');return False
+                # A screen context can exceed the estimate. Preserve the true
+                # provider usage so future admission checks account for the
+                # full charge, rather than disabling unrelated service traffic.
                 db.execute('UPDATE token_reservations SET settled_tokens=? WHERE request_id=?',(actual_tokens,request_id))
                 db.execute('COMMIT');return True
             except BaseException:

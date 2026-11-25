@@ -206,7 +206,7 @@ struct FeatureIntroduction: View {
                     removal: .offset(x: forward ? -24 : 24).combined(with: .opacity)))
             }.clipped()
             HStack {
-                HStack(spacing: 6) { ForEach(0..<Feature.allCases.count) { i in Capsule().fill(i == index ? Color.accentColor : Color.secondary.opacity(0.2)).frame(width: i == index ? 18 : 6, height: 6) } }
+                HStack(spacing: 6) { ForEach(Array(Feature.allCases.indices), id: \.self) { i in Capsule().fill(i == index ? Color.accentColor : Color.secondary.opacity(0.2)).frame(width: i == index ? 18 : 6, height: 6) } }
                 Spacer()
                 HStack(spacing: 9) {
                     if index > 0 {

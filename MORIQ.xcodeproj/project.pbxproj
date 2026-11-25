@@ -21,6 +21,10 @@
 		E11000000000000000000009 /* IslandPreviewAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1100000000000000000000A /* IslandPreviewAdapters.swift */; };
 		E11000000000000000000007 /* IslandModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000008 /* IslandModules.swift */; };
 		E11000000000000000000005 /* IslandActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000006 /* IslandActivity.swift */; };
+		E44000000000000000000001 /* LiquidGlassKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44000000000000000000002 /* LiquidGlassKit.swift */; };
+		E44000000000000000000003 /* IslandSystemTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44000000000000000000004 /* IslandSystemTelemetry.swift */; };
+		E44000000000000000000005 /* MoriqSyncHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44000000000000000000006 /* MoriqSyncHub.swift */; };
+		E44000000000000000000007 /* IslandBentoEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44000000000000000000008 /* IslandBentoEngine.swift */; };
 		E11000000000000000000003 /* IslandPrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000004 /* IslandPrototype.swift */; };
 		E11000000000000000000001 /* IslandInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11000000000000000000002 /* IslandInteraction.swift */; };
         AB1200000000000000000001 /* DeviceRenewalCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1200000000000000000002 /* DeviceRenewalCandidate.swift */; };
@@ -105,6 +109,10 @@
 		E1100000000000000000000A /* IslandPreviewAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandPreviewAdapters.swift; sourceTree = "<group>"; };
 		E11000000000000000000008 /* IslandModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandModules.swift; sourceTree = "<group>"; };
 		E11000000000000000000006 /* IslandActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandActivity.swift; sourceTree = "<group>"; };
+		E44000000000000000000002 /* LiquidGlassKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidGlassKit.swift; sourceTree = "<group>"; };
+		E44000000000000000000004 /* IslandSystemTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandSystemTelemetry.swift; sourceTree = "<group>"; };
+		E44000000000000000000006 /* MoriqSyncHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoriqSyncHub.swift; sourceTree = "<group>"; };
+		E44000000000000000000008 /* IslandBentoEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandBentoEngine.swift; sourceTree = "<group>"; };
 		E11000000000000000000004 /* IslandPrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandPrototype.swift; sourceTree = "<group>"; };
 		E11000000000000000000002 /* IslandInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandInteraction.swift; sourceTree = "<group>"; };
         AB1200000000000000000002 /* DeviceRenewalCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRenewalCandidate.swift; sourceTree = "<group>"; };
@@ -258,6 +266,10 @@
 				E33000000000000000000007 /* IslandShelfView.swift */,
 				E33000000000000000000008 /* IslandClipboardView.swift */,
 				E33000000000000000000009 /* IslandResultViews.swift */,
+				E44000000000000000000002 /* LiquidGlassKit.swift */,
+				E44000000000000000000004 /* IslandSystemTelemetry.swift */,
+				E44000000000000000000006 /* MoriqSyncHub.swift */,
+				E44000000000000000000008 /* IslandBentoEngine.swift */,
 				E11000000000000000000004 /* IslandPrototype.swift */,
 				E11000000000000000000006 /* IslandActivity.swift */,
 				E11000000000000000000008 /* IslandModules.swift */,
@@ -418,6 +430,10 @@
 				E22000000000000000000007 /* IslandShelfView.swift in Sources */,
 				E22000000000000000000008 /* IslandClipboardView.swift in Sources */,
 				E22000000000000000000009 /* IslandResultViews.swift in Sources */,
+				E44000000000000000000001 /* LiquidGlassKit.swift in Sources */,
+				E44000000000000000000003 /* IslandSystemTelemetry.swift in Sources */,
+				E44000000000000000000005 /* MoriqSyncHub.swift in Sources */,
+				E44000000000000000000007 /* IslandBentoEngine.swift in Sources */,
 				E11000000000000000000003 /* IslandPrototype.swift in Sources */,
 				E11000000000000000000005 /* IslandActivity.swift in Sources */,
 				E11000000000000000000007 /* IslandModules.swift in Sources */,

@@ -706,6 +706,14 @@ struct MORIQApp: App {
             return true
         }
         flow.onFirstEntry = { [weak self] in self?.startEnabledFeatures() }
+        assistant.onSaveNote = { [weak self] content in
+            guard let self else { return }
+            if let id = self.stickyNotes.store.create(openOnDesktop: false) {
+                self.stickyNotes.store.updateText(content, id: id)
+                self.stickyNotes.store.flush()
+                SystemTelemetryStore.shared.showToast("已新增为独立岛内便签（不覆盖已有便签）")
+            }
+        }
         converter.onResults = { [weak self] records in
             guard let self else { return }
             self.flow.conversionResults.insert(contentsOf: records.reversed(), at: 0)
@@ -733,6 +741,7 @@ struct MORIQApp: App {
         item.button?.image = icon; item.button?.toolTip = "MORIQ"
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "打开 MORIQ", action: #selector(openMain), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "灵动岛画布与同步设置", action: #selector(openIslandStudio), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "权限设置", action: #selector(openPermissions), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "AI 连接", action: #selector(openConnection), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "转换记录", action: #selector(openConversionResults), keyEquivalent: ""))
@@ -960,9 +969,28 @@ struct MORIQApp: App {
         }) else { flow.notice = "内部测试已禁用系统功能。"; return }
         if islandPrototype == nil {
             let model = IslandPreviewContent.shared
+            IslandBentoStore.shared.shelfItemCountProvider = { [weak store = self.shelf.store] in store?.items.count ?? 0 }
+            IslandBentoStore.shared.notesCoordinator = self.stickyNotes
             let island = IslandPrototype(content: model)
+            island.onOpenStudio = { [weak self] in self?.openIslandStudio() }
             island.onModuleView = { [weak self, weak island] module in
                 guard let self else { return nil }
+                if module == .calendar {
+                    return AnyView(
+                        IslandPlannerUnifiedView(
+                            noteStore: self.stickyNotes.store,
+                            togglePinDesktopNote: { [weak self] id in
+                                guard let self else { return }
+                                if self.prepareStickyNotes() { self.stickyNotes.togglePinFromIsland(id) }
+                            },
+                            createDesktopBackedNote: { [weak self] in
+                                guard let self, self.prepareStickyNotes() else { return nil }
+                                return self.stickyNotes.store.create(openOnDesktop: false)
+                            },
+                            onEditingChange: { [weak island] editing in island?.setEditing(editing) }
+                        )
+                    )
+                }
                 if module == .notes {
                     return AnyView(IslandNotesView(store: self.stickyNotes.store, createNote: { [weak self] in self?.newStickyNote() }, onEditingChange: { [weak island] editing in island?.setEditing(editing) }))
                 }
@@ -1037,11 +1065,20 @@ struct MORIQApp: App {
     #endif
 
     @objc func openMain() { presentMainWindow(activate: true) }
+    @objc func openIslandStudio() {
+        if flow.introComplete && flow.mayEnter {
+            flow.page = .settings
+        }
+        presentMainWindow(activate: true)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .moriqOpenIslandStudio, object: nil)
+        }
+    }
 
     private func presentMainWindow(activate: Bool) {
         if mainWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 650), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "MORIQ"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 650, height: 560)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.title = "MORIQ"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 740, height: 600)
             let root = MainFlowView(flow: flow, store: settings, newNote: { [weak self] in self?.newStickyNote() })
             if runtimeEnvironment.mode == .internalIsolated {
                 guard let defaults = runtimeEnvironment.defaults() else {

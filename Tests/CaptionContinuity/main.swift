@@ -15,6 +15,14 @@ MainActor.assumeIsolated {
  precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"original") == [s.history[0].original])
  precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"zh") == [s.history[0].translated])
  precondition(CaptionHistoryVisibility.lines(s.history[0],mode:"bilingual") == [s.history[0].original,s.history[0].translated])
+ let chinese = "今天我们先确认发布计划。会议结束后，我会整理所有意见。"
+ let korean = "내일 오후에 일정을 확인하겠습니다."
+ let wrongTarget = CaptionHistoryEntry(id: UUID(), original: "We will confirm tomorrow.",
+      sourceLanguage: "en-US", targetLanguage: "zh-Hans", translated: korean)
+ precondition(CaptionHistoryVisibility.lines(wrongTarget, mode: "bilingual") == [wrongTarget.original])
+ let chineseOnly = CaptionHistoryEntry(id: UUID(), original: chinese,
+      sourceLanguage: "en-US", targetLanguage: "zh-Hans", translated: "重复的中文译文。")
+ precondition(CaptionHistoryVisibility.lines(chineseOnly, mode: "bilingual") == [chinese])
  let long = String(repeating: "word ", count: 200)
  s.accept(long)
  precondition(s.original.count > 500)

@@ -1,13 +1,47 @@
 import Foundation
 
 enum IslandModule: String, Codable, CaseIterable, Identifiable {
-    case calendar, focus, music, clipboard, shelf, notes, conversion, captions, screenshot, assistant
+    case bento, calendar, system, control, toolkit, aiDev, focus, music, clipboard, shelf, notes, conversion, captions, screenshot, assistant
+
     var id: String { rawValue }
+
     var title: String {
         switch self {
-        case .calendar: "日历"; case .focus: "专注"; case .music: "音乐"
-        case .clipboard: "剪贴板"; case .shelf: "暂存"; case .notes: "便签"
-        case .conversion: "转换"; case .captions: "字幕"; case .screenshot: "截图"; case .assistant: "助手"
+        case .bento: "总览"
+        case .calendar: "日程"
+        case .system: "算力"
+        case .control: "控制"
+        case .toolkit: "效率"
+        case .aiDev: "AI开发"
+        case .focus: "专注"
+        case .music: "音乐"
+        case .clipboard: "剪贴板"
+        case .shelf: "暂存"
+        case .notes: "便签"
+        case .conversion: "转换"
+        case .captions: "字幕"
+        case .screenshot: "截图"
+        case .assistant: "助手"
+        }
+    }
+
+    var islandSymbolName: String {
+        switch self {
+        case .bento: "square.grid.2x2"
+        case .calendar: "calendar"
+        case .system: "cpu"
+        case .control: "slider.horizontal.3"
+        case .toolkit: "rectangle.split.2x1"
+        case .aiDev: "chevron.left.forwardslash.chevron.right"
+        case .focus: "timer"
+        case .music: "music.note"
+        case .clipboard: "list.clipboard"
+        case .shelf: "tray"
+        case .notes: "note.text"
+        case .conversion: "arrow.left.arrow.right"
+        case .captions: "captions.bubble"
+        case .screenshot: "viewfinder"
+        case .assistant: "sparkle"
         }
     }
 }

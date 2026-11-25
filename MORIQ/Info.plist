@@ -27,7 +27,9 @@
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>用于转换和暂存你选择的下载文件。</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>用于在灵动岛显示你的日程。</string>
+	<string>用于在灵动岛显示你的日程（与岛内自建日程并存，不会覆盖已有记录）。</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>用于在灵动岛待办清单可选同步提醒事项（不会覆盖岛内已有待办）。</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>用于显示和控制音乐播放。</string>
 	<key>NSHighResolutionCapable</key>

@@ -64,6 +64,7 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
     private var lastLiveCaptureAt: Date?
     private var panelAnchor: NSPoint?
     private var panelExpanded = false
+    var onSaveNote: ((String) -> Void)? = nil
     #if DEBUG
     private var verifyPrepared: (() -> Void)?
     private var verifyCaptureOverride: (() async throws -> CGImage)?
@@ -302,27 +303,43 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
         if !preview { LocalDiagnostics.shared.record(.assistant, .open, .started) }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
         if panel == nil {
-            let next = AssistantPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let next = AssistantPanel(contentRect: NSRect(x: 0, y: 0, width: 446, height: 52), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             next.isOpaque = false; next.backgroundColor = .clear; next.hasShadow = true
             next.isMovableByWindowBackground = true
             next.level = .floating; next.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             model.onClearScreen = { [weak self] in self?.invalidateCapture() }
             model.onRequireScreen = { [weak self] in
                 guard let self else { return }
-                // A previous sample can be many seconds old after a long answer.
-                // Capture a fresh frame for every submitted question.
                 self.captureForeground(sendAfterCapture: true)
             }
-            next.contentView = NSHostingView(rootView: AssistantInput(model: model, onMove: { [weak self, weak next] in
-                guard let self, let next else { return }; self.panelAnchor = NSPoint(x: next.frame.midX, y: next.frame.minY)
-            }, capture: { [weak self] in self?.captureForeground() }, close: { [weak self] in self?.dismissPanel() }))
+            next.contentView = NSHostingView(
+                rootView: AssistantInput(
+                    model: model,
+                    onMove: { [weak self, weak next] in
+                        guard let self, let next else { return }
+                        self.panelAnchor = NSPoint(x: next.frame.midX, y: next.frame.minY)
+                    },
+                    onRecenter: { [weak self, weak next] in
+                        guard let self, let next, let screen = next.screen ?? NSScreen.main else { return }
+                        let v = screen.visibleFrame
+                        self.panelAnchor = NSPoint(x: v.midX, y: v.minY + 20)
+                        let f = next.frame
+                        next.animator().setFrameOrigin(NSPoint(x: v.midX - f.width / 2, y: v.minY + 20))
+                    },
+                    onSaveToNote: { [weak self] text in
+                        self?.onSaveNote?(text)
+                    },
+                    capture: { [weak self] in self?.captureForeground() },
+                    close: { [weak self] in self?.dismissPanel() }
+                )
+            )
             model.onExpand = { [weak self, weak next] expanded in
                 guard let self, let next else { return }
                 self.model.conversationExpanded = expanded
                 guard self.panelExpanded != expanded else { return }
                 self.panelExpanded = expanded
                 let old = next.frame
-                let desired = expanded ? NSSize(width: 400, height: 320) : NSSize(width: 360, height: 48)
+                let desired = expanded ? NSSize(width: 468, height: 336) : NSSize(width: 446, height: 52)
                 let bounds = next.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? old
                 let size = NSSize(width: min(desired.width, bounds.width), height: min(desired.height, bounds.height))
                 let anchor = self.panelAnchor ?? NSPoint(x: old.midX, y: old.minY)
@@ -330,17 +347,19 @@ private final class LiveScreenOutput: NSObject, SCStreamOutput, SCStreamDelegate
                                     y: min(max(anchor.y, bounds.minY), bounds.maxY - size.height),
                                     width: size.width, height: size.height)
                 if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { next.setFrame(target, display: true) }
-                else { NSAnimationContext.runAnimationGroup { context in context.duration = 0.2; next.animator().setFrame(target, display: true) } }
+                else { NSAnimationContext.runAnimationGroup { context in context.duration = 0.22; next.animator().setFrame(target, display: true) } }
             }
             next.dismiss = { [weak self] in self?.dismissPanel() }
             panel = next
         }
+        let isDark = UserDefaults.standard.bool(forKey: "moriq.permissionDarkMode")
+        panel?.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
         let frame = screen.visibleFrame
         if panelAnchor == nil {
             panelAnchor = NSPoint(x: frame.midX, y: frame.minY + 20)
-            panel?.setFrameOrigin(NSPoint(x: frame.midX - (panel?.frame.width ?? 360) / 2, y: frame.minY + 20))
+            panel?.setFrameOrigin(NSPoint(x: frame.midX - (panel?.frame.width ?? 446) / 2, y: frame.minY + 20))
         }
         model.panelVisible = true
         panel?.makeKeyAndOrderFront(nil)
@@ -541,87 +560,335 @@ final class AssistantPanel: NSPanel {
 }
 struct AssistantDragRegion: NSViewRepresentable {
     let onMove: () -> Void
-    func makeNSView(context: Context) -> DragView { let view = DragView(); view.onMove = onMove; return view }
-    func updateNSView(_ view: DragView, context: Context) { view.onMove = onMove }
+    var onDoubleClick: (() -> Void)? = nil
+    func makeNSView(context: Context) -> DragView {
+        let view = DragView()
+        view.onMove = onMove
+        view.onDoubleClick = onDoubleClick
+        return view
+    }
+    func updateNSView(_ view: DragView, context: Context) {
+        view.onMove = onMove
+        view.onDoubleClick = onDoubleClick
+    }
     final class DragView: NSView {
         var onMove: (() -> Void)?
-        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event); onMove?() }
+        var onDoubleClick: (() -> Void)?
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                onDoubleClick?()
+                return
+            }
+            window?.performDrag(with: event)
+            onMove?()
+        }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
 }
+
 struct AssistantInput: View {
     @ObservedObject var model: AssistantModel
     let onMove: () -> Void
+    var onRecenter: () -> Void = {}
+    var onSaveToNote: (String) -> Void = { _ in }
     let capture: () -> Void
     let close: () -> Void
     @FocusState private var focused: Bool
+    @State private var savedToastID: UUID? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
+        let radius: CGFloat = model.conversationExpanded ? 28 : 26
         VStack(spacing: 0) {
             if model.conversationExpanded {
-                HStack {
-                    Text("MORIQ").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    AssistantDragRegion(onMove: onMove).frame(maxWidth: .infinity, minHeight: 24)
-                        .overlay(alignment: .top) { Capsule().fill(.secondary.opacity(0.35)).frame(width: 28, height: 3).padding(.top, 1).allowsHitTesting(false) }
-                        .help("拖动移动助手")
-                    Button { model.showingHistory.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.plain).help("历史记录")
-                        .popover(isPresented: $model.showingHistory, arrowEdge: .bottom) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("历史对话").font(.headline).padding(.horizontal, 12).padding(.top, 12)
-                                if model.conversations.isEmpty { Text("暂无历史对话").font(.callout).foregroundStyle(.secondary).padding(12) }
-                                else { ScrollView { LazyVStack(alignment: .leading, spacing: 2) {
-                                    ForEach(model.conversations) { conversation in
-                                        Button { model.openConversation(conversation.id) } label: {
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(conversation.title).lineLimit(1)
-                                                Text(conversation.updatedAt, style: .date).font(.caption).foregroundStyle(.secondary)
-                                            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).padding(8)
-                                        }.buttonStyle(.plain)
-                                    }
-                                }.padding(.horizontal, 4) }.frame(maxHeight: 260) }
-                            }.padding(.bottom, 8).frame(width: 240)
+                // Top Liquid Glass Header Bar (History + Centered Grabber + New Chat + Collapse)
+                ZStack {
+                    AssistantDragRegion(onMove: onMove, onDoubleClick: onRecenter)
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .help("按住拖动位置 · 双击回正屏幕底部中央")
+
+                    Capsule()
+                        .fill(LiquidGlassPalette.inkTertiary(scheme).opacity(0.45))
+                        .frame(width: 34, height: 3.5)
+                        .allowsHitTesting(false)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                model.showingHistory.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: model.showingHistory ? "chevron.left" : "clock.arrow.circlepath")
+                                    .font(.system(size: 11, weight: .medium))
+                                Text(model.showingHistory ? "返回对话" : (model.conversations.isEmpty ? "历史记录" : "历史 (\(model.conversations.count))"))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                            .padding(.horizontal, 8).padding(.vertical, 3.5)
+                            .liquidGlassWell(cornerRadius: 10)
                         }
-                    Button("新对话") { model.reset() }.buttonStyle(.borderless).controlSize(.small)
-                    Button { model.onExpand?(false) } label: { Image(systemName: "chevron.down") }.buttonStyle(.plain).help("收起对话")
-                }.padding(.horizontal, 16).padding(.top, 10)
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(model.messages) { message in
-                                Group {
-                                    if message.role == "assistant" { ChatResponseView(content: message.content.isEmpty ? "正在思考…" : message.content) }
-                                    else { Text(message.displayContent ?? message.content).textSelection(.enabled) }
-                                }
-                                    .font(.system(size: 13))
-                                    .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
-                                    .id(message.id)
-                                    .contextMenu { if message.role == "assistant" && !message.content.isEmpty { Button("复制回复") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.content, forType: .string) } } }
-                            }
-                            if let error = model.error {
-                                HStack { Text(error).font(.caption).foregroundStyle(.secondary); Spacer(); Button("重试") { model.retry() }.buttonStyle(.borderless).controlSize(.small).disabled(model.working) }
-                            }
-                            Color.clear.frame(height: 1).id("bottom")
-                        }.padding(16)
-                    }.onChange(of: model.messages.last?.content) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button {
+                            model.reset()
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                                .frame(width: 24, height: 24)
+                                .liquidGlassWell(cornerRadius: 12)
+                        }
+                        .buttonStyle(.plain)
+                        .help("新建对话")
+
+                        Button {
+                            model.showingHistory = false
+                            model.onExpand?(false)
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                                .frame(width: 24, height: 24)
+                                .liquidGlassWell(cornerRadius: 12)
+                        }
+                        .buttonStyle(.plain)
+                        .help("收起为单行胶囊")
+                    }
+                    .padding(.horizontal, 13)
                 }
-                Divider().padding(.horizontal, 16)
+                .frame(height: 36)
+
+                Rectangle()
+                    .fill(LiquidGlassPalette.divider(scheme))
+                    .frame(height: 0.6)
+                    .padding(.horizontal, 14)
+
+                // Inline History OR Streaming Conversation Stage
+                if model.showingHistory {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if model.conversations.isEmpty {
+                                Text("暂无历史对话")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                                    .padding(16)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            } else {
+                                ForEach(model.conversations) { conv in
+                                    Button {
+                                        model.openConversation(conv.id)
+                                    } label: {
+                                        HStack {
+                                            Text(conv.title)
+                                                .font(.system(size: 12.5, weight: .medium))
+                                                .lineLimit(1)
+                                            Spacer()
+                                            Text(conv.updatedAt, style: .time)
+                                                .font(.system(size: 10.5, design: .monospaced))
+                                                .foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                                        }
+                                        .padding(.horizontal, 11).padding(.vertical, 8)
+                                        .liquidGlassWell(cornerRadius: 12)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(12)
+                    }
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(model.messages) { message in
+                                    if message.role == "user" {
+                                        HStack {
+                                            Spacer(minLength: 36)
+                                            Text(message.displayContent ?? message.content)
+                                                .font(.system(size: 12.5, weight: .medium))
+                                                .textSelection(.enabled)
+                                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                                .liquidGlassPill(selected: true)
+                                        }
+                                        .id(message.id)
+                                    } else {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            if message.content.isEmpty {
+                                                HStack(spacing: 7) {
+                                                    MORIQMark().frame(width: 15, height: 15)
+                                                    Text(model.screenLoading ? "正在读取当前屏幕画面…" : "正在结合当前屏幕推理…")
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .foregroundStyle(LiquidGlassPalette.sapphire)
+                                                }
+                                                .padding(.vertical, 3)
+                                            } else {
+                                                ChatResponseView(content: message.content)
+                                                    .font(.system(size: 13))
+                                                if !model.working {
+                                                    HStack(spacing: 8) {
+                                                        Button {
+                                                            onSaveToNote(message.content)
+                                                            savedToastID = message.id
+                                                        } label: {
+                                                            Text(savedToastID == message.id ? "已存入岛内便签 ✓" : "存入岛内便签")
+                                                                .font(.system(size: 10.5, weight: .semibold))
+                                                                .foregroundStyle(LiquidGlassPalette.sapphire)
+                                                                .padding(.horizontal, 9).padding(.vertical, 3.5)
+                                                                .liquidGlassWell(cornerRadius: 10)
+                                                        }
+                                                        .buttonStyle(.plain)
+
+                                                        Button {
+                                                            NSPasteboard.general.clearContents()
+                                                            NSPasteboard.general.setString(message.content, forType: .string)
+                                                        } label: {
+                                                            Text("复制")
+                                                                .font(.system(size: 10.5, weight: .medium))
+                                                                .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                                                                .padding(.horizontal, 8).padding(.vertical, 3.5)
+                                                                .liquidGlassWell(cornerRadius: 10)
+                                                        }
+                                                        .buttonStyle(.plain)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id(message.id)
+                                        .contextMenu {
+                                            if !message.content.isEmpty {
+                                                Button("复制回复") {
+                                                    NSPasteboard.general.clearContents()
+                                                    NSPasteboard.general.setString(message.content, forType: .string)
+                                                }
+                                                Button("存入岛内便签") {
+                                                    onSaveToNote(message.content)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if let error = model.error {
+                                    HStack {
+                                        Text(error).font(.system(size: 11.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                                        Spacer()
+                                        Button("重试") { model.retry() }
+                                            .buttonStyle(.plain)
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                                            .disabled(model.working)
+                                    }
+                                    .padding(9)
+                                    .liquidGlassWell(cornerRadius: 11)
+                                }
+                                Color.clear.frame(height: 1).id("bottom")
+                            }
+                            .padding(14)
+                        }
+                        .onChange(of: model.messages.last?.content) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                }
+
+                Rectangle()
+                    .fill(LiquidGlassPalette.divider(scheme))
+                    .frame(height: 0.6)
+                    .padding(.horizontal, 14)
             }
+
+            // Bottom Fixed 52pt Capsule Input Row
             HStack(spacing: 8) {
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("关闭助手").accessibilityLabel("关闭助手")
-                Button(action: capture) { Image(systemName: "text.viewfinder") }.buttonStyle(.plain)
-                    .disabled(model.screenLoading || model.working).help("读取整个屏幕文字")
-                    .accessibilityLabel("读取整个屏幕文字")
-                TextField("问问当前屏幕…", text: $model.input).textFieldStyle(.plain).focused($focused).onTapGesture { if !model.conversationExpanded && (!model.messages.isEmpty || model.error != nil) { model.onExpand?(true) } }.onSubmit { model.send() }
-                if model.working { Button { model.stop() } label: { Image(systemName: "stop.circle.fill") }.buttonStyle(.plain) }
-                else { Button { model.send() } label: { Image(systemName: "arrow.up.circle.fill") }.buttonStyle(.plain).disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }.padding(.horizontal, 18).frame(height: 48)
-        }.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-             .overlay {
-                RoundedRectangle(cornerRadius: 24)
-                    .strokeBorder(LinearGradient(colors: [.blue.opacity(0.38), .purple.opacity(0.22), .blue.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭助手 (Esc)")
+                .accessibilityLabel("关闭助手")
+
+                Button(action: capture) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "viewfinder")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(model.liveScreen ? "当前屏幕" : "读屏")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .foregroundStyle(model.liveScreen ? LiquidGlassPalette.sapphire : LiquidGlassPalette.inkSecondary(scheme))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(model.liveScreen ? LiquidGlassPalette.sapphireSoft(scheme) : .clear, in: Capsule())
+                    .overlay {
+                        if !model.liveScreen { Capsule().strokeBorder(LiquidGlassPalette.divider(scheme)) }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(model.screenLoading || model.working)
+                .help("读取当前屏幕画面进行分析")
+                .accessibilityLabel("读取整个屏幕文字")
+
+                TextField("围绕当前屏幕提问…", text: $model.input)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .focused($focused)
+                    .onTapGesture {
+                        if !model.conversationExpanded && (!model.messages.isEmpty || model.error != nil) {
+                            model.onExpand?(true)
+                        }
+                    }
+                    .onSubmit { model.send() }
+
+                if !model.conversationExpanded && (!model.messages.isEmpty || model.error != nil) {
+                    Button {
+                        model.onExpand?(true)
+                    } label: {
+                        Text("↑ 展开")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .liquidGlassWell(cornerRadius: 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if model.working || model.screenLoading {
+                    Button { model.stop() } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button { model.send() } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 21))
+                            .foregroundStyle(
+                                model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? LiquidGlassPalette.inkTertiary(scheme)
+                                    : LiquidGlassPalette.sapphire
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 52)
+        }
+        .liquidGlassPanel(cornerRadius: radius, strong: true)
+        .overlay {
+            if model.working || model.screenLoading {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(LiquidGlassPalette.sapphire.opacity(0.55), lineWidth: 1.4)
                     .allowsHitTesting(false)
             }
-            .onAppear { focused = true }
+        }
+        .onAppear { focused = true }
     }
 }

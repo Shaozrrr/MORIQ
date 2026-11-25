@@ -83,6 +83,10 @@ enum Feature: String, CaseIterable, Identifiable {
     }
 }
 
+extension Notification.Name {
+    static let moriqOpenIslandStudio = Notification.Name("local.moriq.openIslandStudio")
+}
+
 struct SettingsView: View {
     private enum Section: String, CaseIterable, Identifiable {
         case features, shortcuts, island, general
@@ -146,21 +150,42 @@ struct SettingsView: View {
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button {
+                        dark.toggle()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: dark ? "moon.stars.fill" : "sun.max.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(LiquidGlassPalette.sapphire)
+                            Text(dark ? "深色曜石" : "浅色玻璃")
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .liquidGlassPill()
+                    }
+                    .buttonStyle(.plain)
+                    .help("一键切换浅色 / 深色外观并实时预览")
+                    .accessibilityLabel("切换浅深色外观")
                 }.padding(.bottom, 22)
                 switch section {
                 case .features: features
                 case .shortcuts: shortcuts
-                case .island: ScrollView { IslandModuleSettingsView(model: .shared) }
+                case .island: IslandModuleSettingsView(model: .shared)
                 case .general: general
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 30).padding(.top, 28).padding(.bottom, 20)
+            .padding(.horizontal, 26).padding(.top, 24).padding(.bottom, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 650, minHeight: 560, alignment: .topLeading)
+        .frame(minWidth: 740, minHeight: 600, alignment: .topLeading)
         .onDisappear { shortcutRecorder.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in shortcutRecorder.cancel() }
+        .onReceive(NotificationCenter.default.publisher(for: .moriqOpenIslandStudio)) { _ in
+            shortcutRecorder.cancel()
+            section = .island
+        }
     }
     private var features: some View {
         ScrollView {

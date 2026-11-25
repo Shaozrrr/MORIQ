@@ -15,6 +15,7 @@ private struct WheelFormat: Identifiable {
     @Published var selected: Int? = nil
     @Published var visible = false
     @Published var message: String? = nil
+    @Published var sourceLabel: String = "FILE"
     @Published var pdfTextOnly = false
     @Published var sheetSource = false
     @Published var animatedSource = false
@@ -25,51 +26,241 @@ private struct WheelFormat: Identifiable {
 private struct ConverterWheel: View {
     @ObservedObject var state: WheelState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+
+    private func selectedAngleRadians() -> Double? {
+        guard let selected = state.selected, state.formats.indices.contains(selected) else { return nil }
+        let twoRings = state.formats.count > 8
+        let innerCount = WheelGeometry.innerCount(for: state.formats.count)
+        let inner = twoRings && selected < innerCount
+        let groupCount = twoRings ? (inner ? innerCount : state.formats.count - innerCount) : state.formats.count
+        let groupIndex = twoRings && !inner ? selected - innerCount : selected
+        return -Double.pi / 2 + Double(groupIndex) * 2 * .pi / Double(max(1, groupCount))
+    }
+
+    private func isNeighbor(index: Int, twoRings: Bool, innerCount: Int) -> Bool {
+        guard let sel = state.selected, sel != index else { return false }
+        if twoRings {
+            let selInner = sel < innerCount
+            let idxInner = index < innerCount
+            guard selInner == idxInner else { return false }
+            let count = selInner ? innerCount : (state.formats.count - innerCount)
+            let a = selInner ? sel : sel - innerCount
+            let b = idxInner ? index : index - innerCount
+            let diff = abs(a - b)
+            return diff == 1 || diff == count - 1
+        } else {
+            let count = state.formats.count
+            let diff = abs(sel - index)
+            return diff == 1 || diff == count - 1
+        }
+    }
+
+    private func smartSpecHint(for format: WheelFormat) -> String {
+        if ArchiveConverter.isArchiveTarget(format.type) { return "保留原文件 · 生成无损压缩归档副本" }
+        if state.sheetSource {
+            let ext = format.type.preferredFilenameExtension?.lowercased() ?? ""
+            return ["csv", "tsv"].contains(ext) ? "保留计算结果 · 不保留公式与单元格样式" : "保留工作表结构 · 转换后请核对列宽"
+        }
+        if state.videoSource && format.type == .gif { return "提取首条视频轨生成动态 GIF · 调色板自适应量化" }
+        if state.videoSource && ["AVI", "FLV"].contains(format.label) { return "兼容封装重打包 · 特殊音轨将独立保留" }
+        if state.animatedSource { return format.type == .gif ? "保留完整动态帧序列" : "动图硬件编码转为流畅视频" }
+        if state.pdfTextOnly {
+            if format.type.conforms(to: .image) { return "PDF 逐页高清渲染输出为独立图片" }
+            return format.type == .plainText ? "提取纯文本 · 扫描页自动在本机 OCR 识别" : "保留版面结构 · 扫描页保留为内嵌图像"
+        }
+        switch format.label {
+        case "WEBP": return "保留 Alpha 透明通道 · 高压缩比网页图像"
+        case "AVIF": return "10-bit 广色域高压缩比现代图像编码"
+        case "HEIC": return "Apple 原生高效图像容器"
+        case "JPG": return "高画质色度采样 · 不保留透明背景"
+        case "PNG": return "无损位图编码 · 完整保留透明通道"
+        case "PDF": return "封装为高分辨率标准 PDF 文档"
+        case "GIF": return "保存为静态单帧 GIF 图像"
+        case "MP3", "M4A": return "提取高品质立体声音轨"
+        case "WAV", "FLAC": return "提取无损 PCM / FLAC 母带音频"
+        default: return "松手即在本机离线引擎完成转换"
+        }
+    }
+
     var body: some View {
         ZStack {
             if let message = state.message {
-                Text(message).font(.system(size: 13, weight: .medium))
-                    .padding(.horizontal, 17).padding(.vertical, 11)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.08)))
-                    .transition(.opacity)
+                HStack(spacing: 8) {
+                    Circle().fill(state.blue).frame(width: 7, height: 7)
+                    Text(message).font(.system(size: 13, weight: .semibold))
+                }
+                .padding(.horizontal, 18).padding(.vertical, 11)
+                .liquidGlassPanel(cornerRadius: 18, strong: true)
+                .transition(.opacity.combined(with: .scale(scale: 0.94)))
             } else if state.visible {
-              ZStack {
-                ForEach(Array(state.formats.enumerated()), id: \.element.id) { index, format in
-                    let twoRings = state.formats.count > 8
-                    let innerCount = WheelGeometry.innerCount(for: state.formats.count)
-                    let inner = twoRings && index < innerCount
-                    let groupCount = twoRings ? (inner ? innerCount : state.formats.count - innerCount) : state.formats.count
-                    let groupIndex = twoRings && !inner ? index - innerCount : index
-                    let angle = -Double.pi / 2 + Double(groupIndex) * 2 * .pi / Double(groupCount)
-                    let labelRadius: CGFloat = twoRings ? (inner ? 86 : 153) : 120
-                    let selected = state.selected == index
-                    let shape = WheelSegment(index: groupIndex, count: groupCount, inner: twoRings ? (inner ? 56/184 : 122/184) : 56/184, outer: twoRings && inner ? 116/184 : 1)
-                    ZStack {
-                        shape.fill(.ultraThinMaterial)
-                            .overlay(shape.fill(selected ? state.blue.opacity(0.16) : Color(red: 0.75, green: 0.80, blue: 0.89).opacity(0.19)))
-                            .overlay(shape.stroke(selected ? state.blue.opacity(0.58) : Color(red: 0.43, green: 0.50, blue: 0.63).opacity(0.22), lineWidth: selected ? 1.1 : 0.8))
-                            .scaleEffect(selected && !reduceMotion ? 1.015 : 1)
-                        Text(format.label).font(.system(size: twoRings && inner ? 11 : 12, weight: selected ? .semibold : .medium))
-                            .foregroundStyle(selected ? state.blue : Color.primary.opacity(0.78))
-                            .offset(x: CGFloat(cos(angle)) * labelRadius, y: CGFloat(sin(angle)) * labelRadius)
+                ZStack {
+                    // Ambient Optical Backdrop Halo + Calibration Rings
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    state.blue.opacity(state.selected != nil ? 0.14 : 0.05),
+                                    Color.clear
+                                ],
+                                center: .center,
+                                startRadius: 34,
+                                endRadius: 192
+                            )
+                        )
+                        .frame(width: 384, height: 384)
+                        .allowsHitTesting(false)
+
+                    Circle()
+                        .stroke(
+                            Color.primary.opacity(scheme == .dark ? 0.16 : 0.11),
+                            style: StrokeStyle(lineWidth: 2.2, dash: [1, 5.4])
+                        )
+                        .frame(width: 102, height: 102)
+                        .allowsHitTesting(false)
+
+                    Circle()
+                        .stroke(
+                            Color.primary.opacity(scheme == .dark ? 0.12 : 0.08),
+                            style: StrokeStyle(lineWidth: 0.8, dash: [2, 6])
+                        )
+                        .frame(width: 374, height: 374)
+                        .allowsHitTesting(false)
+
+                    if let selAngle = selectedAngleRadians() {
+                        Circle()
+                            .trim(from: 0, to: 0.11)
+                            .stroke(state.blue, style: StrokeStyle(lineWidth: 3.0, lineCap: .round))
+                            .frame(width: 102, height: 102)
+                            .rotationEffect(.radians(selAngle - .pi * 0.11))
+                            .allowsHitTesting(false)
                     }
-                    .frame(width: 368, height: 368)
+
+                    // Filleted Liquid Glass Annular Petals
+                    ForEach(Array(state.formats.enumerated()), id: \.element.id) { index, format in
+                        let twoRings = state.formats.count > 8
+                        let innerCount = WheelGeometry.innerCount(for: state.formats.count)
+                        let inner = twoRings && index < innerCount
+                        let groupCount = twoRings ? (inner ? innerCount : state.formats.count - innerCount) : state.formats.count
+                        let groupIndex = twoRings && !inner ? index - innerCount : index
+                        let angle = -Double.pi / 2 + Double(groupIndex) * 2 * .pi / Double(max(1, groupCount))
+                        let labelRadius: CGFloat = twoRings ? (inner ? 86 : 153) : 120
+                        let selected = state.selected == index
+                        let neighbor = isNeighbor(index: index, twoRings: twoRings, innerCount: innerCount)
+                        let radialLift: CGFloat = reduceMotion ? 0 : (selected ? 5.5 : (neighbor ? 1.6 : 0))
+                        let dx = CGFloat(cos(angle)) * radialLift
+                        let dy = CGFloat(sin(angle)) * radialLift
+                        let shape = WheelSegment(
+                            index: groupIndex,
+                            count: groupCount,
+                            inner: twoRings ? (inner ? 56/184 : 122/184) : 56/184,
+                            outer: twoRings && inner ? 116/184 : 1,
+                            cornerRadius: inner ? 5.5 : 7.5
+                        )
+
+                        ZStack {
+                            if selected {
+                                shape.fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 37/255, green: 99/255, blue: 1).opacity(0.95),
+                                            Color(red: 59/255, green: 130/255, blue: 246/255).opacity(0.90)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(shape.stroke(Color.white.opacity(0.86), lineWidth: 1.3))
+                                .shadow(color: state.blue.opacity(0.38), radius: 12, x: 0, y: 4)
+                            } else {
+                                shape.fill(.ultraThinMaterial)
+                                    .overlay(
+                                        shape.fill(
+                                            scheme == .dark
+                                                ? Color.white.opacity(neighbor ? 0.13 : 0.08)
+                                                : Color.white.opacity(neighbor ? 0.86 : 0.74)
+                                        )
+                                    )
+                                    .overlay(
+                                        shape.stroke(
+                                            scheme == .dark
+                                                ? Color.white.opacity(neighbor ? 0.28 : 0.16)
+                                                : Color.white.opacity(0.92),
+                                            lineWidth: 0.9
+                                        )
+                                    )
+                                    .shadow(color: Color.black.opacity(scheme == .dark ? 0.26 : 0.07), radius: 6, x: 0, y: 2)
+                            }
+
+                            Text(format.label)
+                                .font(.system(size: twoRings && inner ? 10.5 : 11.5, weight: selected ? .bold : .semibold, design: .rounded))
+                                .foregroundStyle(selected ? Color.white : LiquidGlassPalette.inkPrimary(scheme))
+                                .offset(x: CGFloat(cos(angle)) * labelRadius, y: CGFloat(sin(angle)) * labelRadius)
+                        }
+                        .frame(width: 368, height: 368)
+                        .offset(x: dx, y: dy)
+                        .scaleEffect(selected && !reduceMotion ? 1.018 : 1.0)
+                    }
+
+                    // Center Elevated Liquid Glass Prism Hub (SRC → DST)
+                    VStack(spacing: 3) {
+                        if let sel = state.selected, state.formats.indices.contains(sel) {
+                            HStack(spacing: 3) {
+                                Text(state.sourceLabel)
+                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .foregroundStyle(state.blue)
+                                Text(state.formats[sel].label)
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(state.blue)
+                            }
+                            Text("松手立即转换")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(state.blue)
+                        } else {
+                            Text(state.sourceLabel)
+                                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, 7).padding(.vertical, 1.5)
+                                .liquidGlassWell(cornerRadius: 6)
+                            Text("划向四周选格式")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 92, height: 92)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay {
+                        Circle().strokeBorder(
+                            state.selected != nil ? state.blue.opacity(0.55) : Color.white.opacity(scheme == .dark ? 0.24 : 0.9),
+                            lineWidth: 1.1
+                        )
+                    }
+                    .shadow(color: Color.black.opacity(scheme == .dark ? 0.34 : 0.10), radius: 10, x: 0, y: 4)
+                    .scaleEffect(state.selected != nil && !reduceMotion ? 1.04 : 1.0)
+                    .allowsHitTesting(false)
+
+                    // Bottom Floating Smart Technical Spec Pill
+                    if let selected = state.selected, state.formats.indices.contains(selected) {
+                        let hint = smartSpecHint(for: state.formats[selected])
+                        if !hint.isEmpty {
+                            Text(hint)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(LiquidGlassPalette.inkPrimary(scheme))
+                                .padding(.horizontal, 12).padding(.vertical, 5)
+                                .liquidGlassPanel(cornerRadius: 14, strong: true)
+                                .offset(y: 196)
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
-                if let selected = state.selected {
-                    let format = state.formats[selected]
-                    let sheetHint = ["csv", "tsv"].contains(format.type.preferredFilenameExtension?.lowercased() ?? "") ? "保留计算结果，不保留公式和样式" : "转换后请检查列宽与冻结窗格"
-                    let hint = ArchiveConverter.isArchiveTarget(format.type) ? "保留原文件，生成压缩副本" : state.sheetSource ? sheetHint : state.videoSource && format.type == .gif ? "仅首条画面轨；无音频和字幕，颜色量化" : state.videoSource && ["AVI", "FLV"].contains(format.label) ? "不兼容轨道将尝试单独保存" : state.animatedSource ? (format.type == .gif ? "保留动态画面；颜色会量化" : "动图转视频；透明效果因格式而异") : state.pdfTextOnly ? (format.type.conforms(to: .image) ? "每页输出一张图片" : (format.type == .plainText ? "提取文字；扫描页在本机识别" : "扫描页保留为图片；复杂版式可能改变")) : (format.type == .jpeg ? "JPG 不保留透明背景" :
-                        (format.type == .gif ? "GIF 将保存为单帧" : (format.label == "M4A" ? "M4A 使用有损 AAC 编码" : "")))
-                    if !hint.isEmpty { Text(hint).font(.system(size: 9)).foregroundStyle(.secondary).offset(y: 200) }
-                }
-              }
-              .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.88)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.84)))
             }
         }
         .frame(width: WheelGeometry.panelSize, height: WheelGeometry.panelSize)
-        .animation(reduceMotion ? .easeOut(duration: 0.12) : .easeOut(duration: 0.18), value: state.selected)
-        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.82), value: state.visible)
+        .animation(reduceMotion ? .easeOut(duration: 0.10) : .spring(response: 0.24, dampingFraction: 0.78), value: state.selected)
+        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.38, dampingFraction: 0.80), value: state.visible)
         .animation(.easeOut(duration: 0.18), value: state.message)
     }
 }
@@ -91,19 +282,55 @@ private struct WheelInteractionFixture: View {
 }
 #endif
 
+/// Precision Annular Petal Shape with 4 Filleted Rounded Vertices
 private struct WheelSegment: Shape {
     let index: Int
     let count: Int
     let inner: CGFloat
     let outer: CGFloat
+    var cornerRadius: CGFloat = 7.0
+
     func path(in rect: CGRect) -> Path {
-        let center = CGPoint(x: rect.midX, y: rect.midY), radius = min(rect.width, rect.height) / 2
-        let sweep = 360.0 / Double(count)
-        let start = -90.0 + Double(index) * sweep - sweep / 2 + 1.5
-        let end = -90.0 + Double(index) * sweep + sweep / 2 - 1.5
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let maxR = min(rect.width, rect.height) / 2
+        let r1 = maxR * inner
+        let r2 = maxR * outer
+        let sweep = (2.0 * Double.pi) / Double(max(1, count))
+        let pad = 1.5 * Double.pi / 180.0
+        let a0 = -Double.pi / 2.0 + Double(index) * sweep - sweep / 2.0 + pad
+        let a1 = -Double.pi / 2.0 + Double(index) * sweep + sweep / 2.0 - pad
+        let span = max(0.02, a1 - a0)
+
+        let cr = min(Double(cornerRadius), Double(r2 - r1) * 0.30, span * Double(r1) * 0.26)
+        let da1 = cr / max(1.0, Double(r1) + cr * 0.5)
+        let da2 = cr / max(1.0, Double(r2) - cr * 0.5)
+
+        func pt(_ r: Double, _ a: Double) -> CGPoint {
+            CGPoint(x: center.x + CGFloat(r * cos(a)), y: center.y + CGFloat(r * sin(a)))
+        }
+
         var path = Path()
-        path.addArc(center: center, radius: radius * outer, startAngle: .degrees(start), endAngle: .degrees(end), clockwise: false)
-        path.addArc(center: center, radius: radius * inner, startAngle: .degrees(end), endAngle: .degrees(start), clockwise: true)
+        path.move(to: pt(Double(r1) + cr, a0))
+        path.addLine(to: pt(Double(r2) - cr, a0))
+        path.addQuadCurve(to: pt(Double(r2), a0 + da2), control: pt(Double(r2), a0))
+        path.addArc(
+            center: center,
+            radius: r2,
+            startAngle: .radians(a0 + da2),
+            endAngle: .radians(a1 - da2),
+            clockwise: false
+        )
+        path.addQuadCurve(to: pt(Double(r2) - cr, a1), control: pt(Double(r2), a1))
+        path.addLine(to: pt(Double(r1) + cr, a1))
+        path.addQuadCurve(to: pt(Double(r1), a1 - da1), control: pt(Double(r1), a1))
+        path.addArc(
+            center: center,
+            radius: r1,
+            startAngle: .radians(a1 - da1),
+            endAngle: .radians(a0 + da1),
+            clockwise: true
+        )
+        path.addQuadCurve(to: pt(Double(r1) + cr, a0), control: pt(Double(r1), a0))
         path.closeSubpath()
         return path
     }
@@ -361,6 +588,8 @@ struct ConversionRecord: Identifiable {
             }
             self.noticeTask?.cancel(); self.noticeTask = nil
             self.urls = files; self.state.formats = validTargets; self.state.selected = nil; self.state.message = nil
+            let distinctExts = Set(files.map { $0.pathExtension.uppercased() }.filter { !$0.isEmpty })
+            self.state.sourceLabel = distinctExts.count == 1 ? (distinctExts.first ?? "FILE") : (files.count > 1 ? "\(files.count)项" : "FILE")
             self.state.pdfTextOnly = inspection.document == .pdf
             self.state.sheetSource = inspection.document == .sheet
             self.state.animatedSource = inspection.animated
@@ -378,6 +607,8 @@ struct ConversionRecord: Identifiable {
         debugWheelPresentationCount += 1
         #endif
         let panel = self.panel ?? makePanel()
+        let isDark = UserDefaults.standard.bool(forKey: "moriq.permissionDarkMode")
+        panel.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main
         let side = WheelGeometry.panelSize
         let bounds = screen?.visibleFrame ?? NSRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)

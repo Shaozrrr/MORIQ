@@ -3,7 +3,7 @@ import AppKit
 enum CaptionWindowSizing {
     static func laneHeight(fontSize: CGFloat) -> CGFloat {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
-        return ceil(NSLayoutManager().defaultLineHeight(for: font) * 2)
+        return ceil(NSLayoutManager().defaultLineHeight(for: font) * 2) + 4
     }
     static func requiredHeight(fontSize: CGFloat, mode: String) -> CGFloat {
         let original = laneHeight(fontSize: fontSize)
@@ -11,7 +11,9 @@ enum CaptionWindowSizing {
         let lanes: CGFloat = mode == "original" ? original : mode == "zh" ? translation : max(original, translation) * 2 + 4
         return lanes + 22
     }
-    static func nativeHeight(fontSize: CGFloat, mode: String) -> CGFloat { max(130, requiredHeight(fontSize: fontSize, mode: mode)) }
+    static func nativeHeight(fontSize: CGFloat, mode: String) -> CGFloat {
+        max(mode == "bilingual" ? 128 : 80, requiredHeight(fontSize: fontSize, mode: mode))
+    }
     static func effectiveMode(mode: String, sameLanguage: Bool) -> String { sameLanguage ? "original" : mode }
     static func canFit(mode: String, availableContent: CGFloat) -> Bool {
         requiredHeight(fontSize: 6, mode: mode) <= availableContent
