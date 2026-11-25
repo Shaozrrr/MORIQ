@@ -394,6 +394,7 @@ enum IslandTabLabelMode: String, CaseIterable, Identifiable {
     }
     @Published var selectedCategory: BentoCategory = .all
     @Published var spotlightWidget: BentoWidgetID? = nil
+    @Published var inlineDIYOpen: Bool = false
 
     var onNavigateModule: ((IslandModule) -> Void)?
     var onOpenDIYSettings: (() -> Void)?
@@ -510,6 +511,55 @@ enum IslandTabLabelMode: String, CaseIterable, Identifiable {
             gridMaxCells = cells
             while usedCells > gridMaxCells && !activeCanvas.isEmpty {
                 activeCanvas.removeLast()
+            }
+        }
+    }
+
+    func applyCanvasTemplate(_ templateID: String) {
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+            spotlightWidget = nil
+            switch templateID {
+            case "all_round":
+                gridMaxCells = 12
+                activeCanvas = [
+                    BentoCanvasEntry(widgetID: .realMac, variantKey: "banner_4x1"),
+                    BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"),
+                    BentoCanvasEntry(widgetID: .bluetooth, variantKey: "rings_2x1"),
+                    BentoCanvasEntry(widgetID: .brightVol, variantKey: "capsule_2x1"),
+                    BentoCanvasEntry(widgetID: .hideDock, variantKey: "tile_1x1"),
+                    BentoCanvasEntry(widgetID: .micMute, variantKey: "tile_1x1")
+                ]
+            case "bento_square":
+                gridMaxCells = 16
+                activeCanvas = [
+                    BentoCanvasEntry(widgetID: .realMac, variantKey: "square_2x2"),
+                    BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"),
+                    BentoCanvasEntry(widgetID: .bluetooth, variantKey: "rings_2x1"),
+                    BentoCanvasEntry(widgetID: .brightVol, variantKey: "pillars_1x2"),
+                    BentoCanvasEntry(widgetID: .meeting, variantKey: "next_2x1"),
+                    BentoCanvasEntry(widgetID: .hideDock, variantKey: "tile_1x1"),
+                    BentoCanvasEntry(widgetID: .aiQuota, variantKey: "bars_2x1"),
+                    BentoCanvasEntry(widgetID: .micMute, variantKey: "tile_1x1")
+                ]
+            case "dev_pro":
+                gridMaxCells = 12
+                activeCanvas = [
+                    BentoCanvasEntry(widgetID: .realMac, variantKey: "rings_2x1"),
+                    BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"),
+                    BentoCanvasEntry(widgetID: .aiQuota, variantKey: "square_2x2"),
+                    BentoCanvasEntry(widgetID: .devPorts, variantKey: "list_2x1"),
+                    BentoCanvasEntry(widgetID: .network, variantKey: "dual_2x1")
+                ]
+            case "compact_8":
+                gridMaxCells = 8
+                activeCanvas = [
+                    BentoCanvasEntry(widgetID: .realMac, variantKey: "rings_2x1"),
+                    BentoCanvasEntry(widgetID: .bluetooth, variantKey: "rings_2x1"),
+                    BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"),
+                    BentoCanvasEntry(widgetID: .aiQuota, variantKey: "bars_2x1")
+                ]
+            default:
+                break
             }
         }
     }
@@ -1701,7 +1751,9 @@ struct BentoDenseCanvasGridView: View {
                         if editable {
                             bentoStore.spotlightWidget = nil
                         } else {
-                            bentoStore.onOpenDIYSettings?()
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                bentoStore.inlineDIYOpen = true
+                            }
                         }
                     }
                     .frame(width: colWidth, height: rowHeight)
@@ -3165,5 +3217,125 @@ private struct VariantShowcaseFlowView: View {
         }
         if !cur.isEmpty { rows.append(cur) }
         return rows
+    }
+}
+
+/// Inline Bottom DIY Widget & Style Drawer shown directly beneath the live Bento canvas inside the Dynamic Island.
+struct InlineIslandDIYDrawerView: View {
+    @ObservedObject var bentoStore: IslandBentoStore
+    @Environment(\.colorScheme) private var scheme
+
+    private var filteredWidgets: [BentoWidgetID] {
+        if let spot = bentoStore.spotlightWidget { return [spot] }
+        if bentoStore.selectedCategory == .all { return BentoWidgetID.allCases }
+        return BentoWidgetID.allCases.filter { $0.category == bentoStore.selectedCategory }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Top Capacity & One-Click Template Strip
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    ForEach([8, 12, 16], id: \.self) { cap in
+                        Button("4×\(cap / 4)") { bentoStore.setCapacity(cap) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: bentoStore.gridMaxCells == cap ? .bold : .medium, design: .monospaced))
+                            .padding(.horizontal, 7).padding(.vertical, 2.5)
+                            .background(bentoStore.gridMaxCells == cap ? Color.white.opacity(scheme == .dark ? 0.18 : 0.94) : .clear, in: Capsule())
+                    }
+                }
+                .padding(2)
+                .liquidGlassWell(cornerRadius: 11)
+
+                Text("已占 \(bentoStore.usedCells)/\(bentoStore.gridMaxCells) 格")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LiquidGlassPalette.sapphire)
+                    .padding(.horizontal, 7).padding(.vertical, 2.5)
+                    .background(LiquidGlassPalette.sapphireSoft(scheme), in: Capsule())
+
+                Spacer(minLength: 4)
+
+                HStack(spacing: 4) {
+                    templatePill("all_round", "全能横版", accent: false)
+                    templatePill("bento_square", "✦ 方砖混排", accent: true)
+                    templatePill("dev_pro", "极客开发", accent: false)
+                    templatePill("compact_8", "精简双行", accent: false)
+                }
+            }
+
+            // Category Filter or Spotlight Header
+            HStack(spacing: 6) {
+                if let spot = bentoStore.spotlightWidget {
+                    HStack(spacing: 6) {
+                        Text("正在切换「\(spot.title)」的 \(spot.variants.count) 款样式")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                        Button("← 全部组件") { bentoStore.spotlightWidget = nil }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 7).padding(.vertical, 2.5)
+                            .liquidGlassPill()
+                    }
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 2) {
+                            ForEach(BentoCategory.allCases) { cat in
+                                Button(cat.title) { bentoStore.selectedCategory = cat }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 10, weight: bentoStore.selectedCategory == cat ? .semibold : .regular))
+                                    .padding(.horizontal, 8).padding(.vertical, 2.5)
+                                    .background(bentoStore.selectedCategory == cat ? Color.white.opacity(scheme == .dark ? 0.16 : 0.92) : .clear, in: Capsule())
+                            }
+                        }
+                        .padding(2)
+                        .liquidGlassWell(cornerRadius: 12)
+                    }
+                }
+                Spacer(minLength: 4)
+                Text("点按选用或拖入上方画布")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                    .lineLimit(1)
+            }
+
+            // Independently Scrollable Multi-Style Drawer
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(filteredWidgets) { wid in
+                        let currentKey = bentoStore.activeCanvas.first(where: { $0.widgetID == wid })?.variantKey
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(wid.title).font(.system(size: 11, weight: .semibold))
+                                Text(wid.subtitle).font(.system(size: 10)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme)).lineLimit(1)
+                                Spacer()
+                                Text("\(wid.variants.count) 款样式")
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                                    .padding(.horizontal, 6).padding(.vertical, 1.5)
+                                    .liquidGlassPill()
+                            }
+                            VariantShowcaseFlowView(widget: wid, activeVariantKey: currentKey) { chosenKey in
+                                bentoStore.selectOrInsert(widget: wid, variantKey: chosenKey)
+                            }
+                        }
+                        .padding(9)
+                        .liquidGlassWell(cornerRadius: 14)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(height: 196)
+        }
+        .padding(.horizontal, 13)
+        .padding(.bottom, 10)
+    }
+
+    private func templatePill(_ id: String, _ title: String, accent: Bool) -> some View {
+        Button(title) { bentoStore.applyCanvasTemplate(id) }
+            .buttonStyle(.plain)
+            .font(.system(size: 9.5, weight: accent ? .semibold : .medium))
+            .foregroundStyle(accent ? LiquidGlassPalette.sapphire : LiquidGlassPalette.inkSecondary(scheme))
+            .padding(.horizontal, 7).padding(.vertical, 2.5)
+            .liquidGlassWell(cornerRadius: 10)
     }
 }

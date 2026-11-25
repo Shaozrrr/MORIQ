@@ -95,11 +95,14 @@ final class IslandPanel: NSPanel {
             }
         }
 
-        bentoObserver = Publishers.Merge4(
-            bentoStore.$gridMaxCells.map { _ in () },
-            bentoStore.$activeCanvas.map { _ in () },
-            bentoStore.$compactShell.map { _ in () },
-            bentoStore.$compactSlots.map { _ in () }
+        bentoObserver = Publishers.Merge(
+            Publishers.Merge4(
+                bentoStore.$gridMaxCells.map { _ in () },
+                bentoStore.$activeCanvas.map { _ in () },
+                bentoStore.$compactShell.map { _ in () },
+                bentoStore.$compactSlots.map { _ in () }
+            ),
+            bentoStore.$inlineDIYOpen.map { _ in () }
         ).dropFirst().sink { [weak self] _ in
             Task { @MainActor in
                 self?.refreshExpandedGeometryIfVisible()
@@ -168,6 +171,7 @@ final class IslandPanel: NSPanel {
 
     private func resetPresentation() {
         pending?.cancel(); pending = nil; interactionHeld = false; editingHeld = false
+        if bentoStore.inlineDIYOpen { bentoStore.inlineDIYOpen = false; bentoStore.spotlightWidget = nil }
         if lastPhase == .expanded && content === IslandPreviewContent.shared {
             SystemTelemetryStore.shared.releaseSampling()
         }
@@ -198,7 +202,7 @@ final class IslandPanel: NSPanel {
         let corridor = CGRect(x: frame.midX - 80, y: panelBounds.maxY - 14,
                               width: 160, height: max(0, frame.maxY - panelBounds.maxY + 14))
         let panelArea = (panel?.isVisible == true) && (panelBounds.insetBy(dx: -14, dy: -14).contains(point) || corridor.contains(point))
-        let modalHeld = (content === IslandPreviewContent.shared) && MoriqSyncHub.shared.showingGoogleConnectSheet
+        let modalHeld = (content === IslandPreviewContent.shared) && (MoriqSyncHub.shared.showingGoogleConnectSheet || bentoStore.inlineDIYOpen)
         let interacting = interactionHeld || editingHeld || modalHeld
         let old = state.phase
         state.sample(now: ProcessInfo.processInfo.systemUptime, screen: id, inTrigger: isTop, inPanelOrCorridor: panelArea, interacting: interacting)
@@ -221,14 +225,15 @@ final class IslandPanel: NSPanel {
         guard content === IslandPreviewContent.shared else {
             return NSSize(width: min(460, visible.width), height: min(280, visible.height))
         }
-        let width = min(564, visible.width - 20)
         let selected = content.selection.selected ?? .bento
+        let isInlineDIY = (selected == .bento && bentoStore.inlineDIYOpen)
+        let width = min(isInlineDIY ? 632 : 564, visible.width - 20)
         let height: CGFloat
         switch selected {
         case .bento:
             let packed = BentoGridPacker.pack(entries: bentoStore.activeCanvas, maxCells: bentoStore.gridMaxCells, columns: 4)
             let gridH = CGFloat(packed.totalRows) * 74 + CGFloat(max(0, packed.totalRows - 1)) * 8
-            height = min(visible.height - 40, gridH + 78)
+            height = min(visible.height - 40, gridH + 78 + (isInlineDIY ? 280 : 0))
         case .calendar:
             height = min(visible.height - 40, 356)
         case .system:
@@ -474,6 +479,10 @@ private struct IslandPrototypeView: View {
                             let showLabel = isProductShell && isSelected
                             Button {
                                 withAnimation(.spring(response: 0.26, dampingFraction: 0.84)) {
+                                    if module != .bento && bentoStore.inlineDIYOpen {
+                                        bentoStore.inlineDIYOpen = false
+                                        bentoStore.spotlightWidget = nil
+                                    }
                                     model.select(module)
                                 }
                                 select(module.rawValue)
@@ -501,17 +510,34 @@ private struct IslandPrototypeView: View {
                 if isProductShell {
                     HStack(spacing: 5) {
                         Button {
-                            openStudio?()
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                let next = !bentoStore.inlineDIYOpen
+                                bentoStore.inlineDIYOpen = next
+                                if next {
+                                    model.select(.bento)
+                                } else {
+                                    bentoStore.spotlightWidget = nil
+                                }
+                            }
                         } label: {
-                            Text("✦ DIY (\(bentoStore.usedCells)/\(bentoStore.gridMaxCells))")
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(LiquidGlassPalette.sapphire)
-                                .padding(.horizontal, 8)
-                                .frame(height: 24)
-                                .liquidGlassPill(selected: false)
+                            if bentoStore.inlineDIYOpen {
+                                Text("✓ 完成 DIY")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 24)
+                                    .background(LiquidGlassPalette.sapphire, in: Capsule())
+                            } else {
+                                Text("✦ DIY (\(bentoStore.usedCells)/\(bentoStore.gridMaxCells)格)")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(LiquidGlassPalette.sapphire)
+                                    .padding(.horizontal, 8)
+                                    .frame(height: 24)
+                                    .liquidGlassPill(selected: false)
+                            }
                         }
                         .buttonStyle(.plain)
-                        .help("打开置顶画布与多样式组件库")
+                        .help(bentoStore.inlineDIYOpen ? "完成画布编辑并收起下方抽屉" : "在灵动岛下方直接弹出组件库，对着上方实时修改")
 
                         Button {
                             openStudio?()
@@ -562,9 +588,22 @@ private struct IslandPrototypeView: View {
         if let module = model.selection.selected {
             switch module {
             case .bento:
-                BentoDenseCanvasGridView(bentoStore: bentoStore, editable: false, rowHeight: 74, spacing: 8)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 10)
+                VStack(spacing: 0) {
+                    BentoDenseCanvasGridView(bentoStore: bentoStore, editable: bentoStore.inlineDIYOpen, rowHeight: 74, spacing: 8)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 10)
+
+                    if bentoStore.inlineDIYOpen {
+                        Rectangle()
+                            .fill(LiquidGlassPalette.divider(effectiveScheme))
+                            .frame(height: 0.7)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 8)
+
+                        InlineIslandDIYDrawerView(bentoStore: bentoStore)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
 
             case .system:
                 SystemDeepTelemetryStageView(telemetry: telemetry)
