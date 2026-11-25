@@ -111,6 +111,7 @@ struct LiquidGlassPanelModifier: ViewModifier {
                 }
                 .clipShape(shape)
             }
+            .clipShape(shape)
             .overlay {
                 // Fresnel multi-stop specular rim
                 shape.strokeBorder(
@@ -166,6 +167,7 @@ struct LiquidGlassTileModifier: ViewModifier {
                     .clipShape(shape)
                 }
             }
+            .clipShape(shape)
             .overlay {
                 shape.strokeBorder(
                     active

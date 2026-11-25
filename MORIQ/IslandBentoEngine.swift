@@ -748,35 +748,40 @@ struct BentoWidgetTileView: View {
             .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         case "rings_2x1":
-            HStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    AppleRingGauge(percent: hw.ramPercent, size: 44, lineWidth: 4.2, tint: LiquidGlassPalette.sapphire) {
+            HStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    AppleRingGauge(percent: hw.ramPercent, size: 36, lineWidth: 3.6, tint: LiquidGlassPalette.sapphire) {
                         Text("\(Int(hw.ramPercent.rounded()))%")
-                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("统一内存").font(.system(size: 10)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("统一内存").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme)).lineLimit(1)
                         Text(String(format: "%.1f/%.0fG", hw.ramUsedGB, hw.ramTotalGB))
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                             .lineLimit(1)
+                            .minimumScaleFactor(0.82)
                     }
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer(minLength: 0)
-                HStack(spacing: 8) {
-                    AppleRingGauge(percent: hw.ssdUsedPercent, size: 44, lineWidth: 4.2, tint: LiquidGlassPalette.cpuStroke(scheme)) {
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    AppleRingGauge(percent: hw.ssdUsedPercent, size: 36, lineWidth: 3.6, tint: LiquidGlassPalette.cpuStroke(scheme)) {
                         Text("\(Int(hw.ssdUsedPercent.rounded()))%")
-                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("闪存空间").font(.system(size: 10)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
-                        Text("余 \(Int(hw.ssdAvailableGB))G")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("闪存空间").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme)).lineLimit(1)
+                        Text("余\(Int(hw.ssdAvailableGB))G")
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                             .lineLimit(1)
+                            .minimumScaleFactor(0.82)
                     }
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.system) }
@@ -821,104 +826,105 @@ struct BentoWidgetTileView: View {
             .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         case "square_2x2":
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    MachinedAppleDieBadge(chipShort: hw.chipShort, coreShort: "\(hw.coreCount)C", size: 42)
-                    VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    MachinedAppleDieBadge(chipShort: hw.chipShort, coreShort: "\(hw.coreCount)C", size: 36)
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(telemetry.displayHostTitle)
-                            .font(.system(size: 12.5, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                         Text("\(hw.modelIdentifier) · macOS \(hw.osVersion)")
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 9.5, design: .monospaced))
                             .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
-                VStack(spacing: 7) {
-                    VStack(alignment: .leading, spacing: 5) {
+                VStack(spacing: 5) {
+                    VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("统一内存").foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                             Spacer()
                             Text(String(format: "%.1f / %.0f GB", hw.ramUsedGB, hw.ramTotalGB)).fontWeight(.bold)
-                        }.font(.system(size: 10.5, design: .monospaced)).lineLimit(1)
+                        }.font(.system(size: 10, design: .monospaced)).lineLimit(1)
                         MultiSegmentTelemetryBar(primaryFraction: appFrac, secondaryFraction: wiredFrac)
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 8).liquidGlassWell(cornerRadius: 12)
+                    .padding(.horizontal, 9).padding(.vertical, 6).liquidGlassWell(cornerRadius: 11)
 
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("内置闪存").foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                             Spacer()
                             Text("可用 \(Int(hw.ssdAvailableGB))G / \(hw.ssdTotalDisplay)").fontWeight(.bold)
-                        }.font(.system(size: 10.5, design: .monospaced)).lineLimit(1)
+                        }.font(.system(size: 10, design: .monospaced)).lineLimit(1)
                         MultiSegmentTelemetryBar(primaryFraction: usedDiskFrac * 0.65, secondaryFraction: usedDiskFrac * 0.35, primaryColor: LiquidGlassPalette.cpuStroke(scheme), secondaryColor: LiquidGlassPalette.sapphire)
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 8).liquidGlassWell(cornerRadius: 12)
+                    .padding(.horizontal, 9).padding(.vertical, 6).liquidGlassWell(cornerRadius: 11)
                 }
             }
-            .padding(13)
+            .padding(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: 20)
             .onTapGesture { bentoStore.onNavigateModule?(.system) }
 
         default: // banner_4x1
-            HStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    MachinedAppleDieBadge(chipShort: hw.chipShort, coreShort: "\(hw.coreCount)C", size: 42)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    MachinedAppleDieBadge(chipShort: hw.chipShort, coreShort: "\(hw.coreCount)C", size: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
                             Text(telemetry.displayHostTitle)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: 12, weight: .semibold))
                                 .lineLimit(1)
                             Text("\(hw.modelIdentifier) · \(hw.osVersion)")
-                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
-                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .padding(.horizontal, 5).padding(.vertical, 1.5)
                                 .liquidGlassPill()
+                                .lineLimit(1)
                         }
-                        HStack(spacing: 5) {
-                            Circle().fill(LiquidGlassPalette.sapphire).frame(width: 5.5, height: 5.5)
+                        HStack(spacing: 4) {
+                            Circle().fill(LiquidGlassPalette.sapphire).frame(width: 5, height: 5)
                             Text(String(format: "%.1fW · %d°C · 电量 %d%%", telemetry.powerWatts, telemetry.thermalCelsius, telemetry.batteryPercent))
-                                .font(.system(size: 10.5, design: .monospaced))
+                                .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                                 .lineLimit(1)
                         }
                     }
                 }
-                Spacer(minLength: 6)
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("内存").font(.system(size: 10, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                Spacer(minLength: 4)
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("内存").font(.system(size: 9.5, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                             Spacer(minLength: 2)
                             Text(String(format: "%.1f/%.0fG", hw.ramUsedGB, hw.ramTotalGB))
-                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .lineLimit(1)
                         }
                         MultiSegmentTelemetryBar(primaryFraction: appFrac, secondaryFraction: wiredFrac)
                     }
-                    .padding(.horizontal, 9).padding(.vertical, 7)
-                    .frame(width: 118)
-                    .liquidGlassWell(cornerRadius: 12)
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .frame(width: 108)
+                    .liquidGlassWell(cornerRadius: 11)
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("储存").font(.system(size: 10, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("储存").font(.system(size: 9.5, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                             Spacer(minLength: 2)
                             Text("余\(Int(hw.ssdAvailableGB))G/\(hw.ssdTotalDisplay)")
-                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .lineLimit(1)
                         }
                         MultiSegmentTelemetryBar(primaryFraction: usedDiskFrac * 0.65, secondaryFraction: usedDiskFrac * 0.35, primaryColor: LiquidGlassPalette.cpuStroke(scheme), secondaryColor: LiquidGlassPalette.sapphire)
                     }
-                    .padding(.horizontal, 9).padding(.vertical, 7)
-                    .frame(width: 122)
-                    .liquidGlassWell(cornerRadius: 12)
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .frame(width: 112)
+                    .liquidGlassWell(cornerRadius: 11)
                 }
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.system) }
@@ -996,37 +1002,38 @@ struct BentoWidgetTileView: View {
     @ViewBuilder private var batteryCareView: some View {
         let remainText = telemetry.remainingMinutes.map { "\($0 / 60)h \($0 % 60)m" } ?? (telemetry.isCharging ? "充电中" : "电源供电")
         if variant.w == 1 {
-            VStack(spacing: 4) {
-                AppleRingGauge(percent: Double(telemetry.batteryPercent), size: 42, lineWidth: 4.0) {
-                    Text("\(telemetry.batteryPercent)%").font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            VStack(spacing: 3) {
+                AppleRingGauge(percent: Double(telemetry.batteryPercent), size: 36, lineWidth: 3.6) {
+                    Text("\(telemetry.batteryPercent)%").font(.system(size: 9, weight: .bold, design: .monospaced))
                 }
-                Text("健康 \(telemetry.batteryHealthPercent)%").font(.system(size: 9.5, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                Text("健康 \(telemetry.batteryHealthPercent)%").font(.system(size: 9, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
             }
-            .padding(8)
+            .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("电池健康 · \(telemetry.batteryHealthPercent)%")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10.5, weight: .semibold))
                     Spacer()
                     Text(telemetry.isCharging ? "快充中" : "循环 \(telemetry.batteryCycles) 次")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundStyle(LiquidGlassPalette.sapphire)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .padding(.horizontal, 6).padding(.vertical, 1.5)
                         .liquidGlassPill()
                 }
                 Spacer(minLength: 0)
                 HStack(alignment: .firstTextBaseline) {
                     Text("\(telemetry.batteryPercent)%")
-                        .font(.system(size: variant.h == 2 ? 26 : 19, weight: .bold, design: .monospaced))
+                        .font(.system(size: variant.h == 2 ? 24 : 17, weight: .bold, design: .monospaced))
                     Text(remainText)
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 10))
                         .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        .lineLimit(1)
                     Spacer()
                     Text(String(format: "%.1fW · %d°C", telemetry.powerWatts, telemetry.thermalCelsius))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(LiquidGlassPalette.sapphire)
                 }
                 if variant.h == 2 {
@@ -1034,7 +1041,7 @@ struct BentoWidgetTileView: View {
                         .padding(.top, 4)
                 }
             }
-            .padding(13)
+            .padding(.horizontal, 11).padding(.vertical, 9)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
         }
@@ -1047,16 +1054,16 @@ struct BentoWidgetTileView: View {
             Button {
                 telemetry.cycleBluetoothSpotlight()
             } label: {
-                VStack(spacing: 5) {
-                    AppleRingGauge(percent: Double(cur.percent), size: 42, lineWidth: 4.0) {
-                        Image(systemName: cur.symbol).font(.system(size: 12.5, weight: .medium))
+                VStack(spacing: 3) {
+                    AppleRingGauge(percent: Double(cur.percent), size: 36, lineWidth: 3.6) {
+                        Image(systemName: cur.symbol).font(.system(size: 11.5, weight: .medium))
                     }
-                    HStack(spacing: 3) {
-                        Text(cur.shortName).font(.system(size: 10, weight: .semibold)).lineLimit(1)
-                        Text("\(cur.percent)%").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
+                    HStack(spacing: 2) {
+                        Text(cur.shortName).font(.system(size: 9.5, weight: .semibold)).lineLimit(1)
+                        Text("\(cur.percent)%").font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
                     }
                 }
-                .padding(8)
+                .padding(6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .buttonStyle(.plain)
@@ -1183,7 +1190,7 @@ struct BentoWidgetTileView: View {
 
     @ViewBuilder private var appMixerView: some View {
         let channels = telemetry.appMixer
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             if variant.h == 2 {
                 HStack {
                     Text("应用独立混音台").font(.system(size: 11.5, weight: .semibold))
@@ -1195,13 +1202,13 @@ struct BentoWidgetTileView: View {
                 ControlCenterSliderCapsule(symbol: "waveform", value: ch.volume, label: ch.name) { val, _ in
                     telemetry.setAppChannelVolume(id: ch.id, value: val)
                 }
-                .frame(height: variant.h == 2 ? 32 : 27)
+                .frame(height: variant.h == 2 ? 30 : 23)
             }
             if channels.isEmpty {
                 Text("暂无活跃媒体应用").font(.system(size: 11)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
             }
         }
-        .padding(10)
+        .padding(.horizontal, 9).padding(.vertical, 7)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
     }
@@ -1347,13 +1354,13 @@ struct BentoWidgetTileView: View {
     @ViewBuilder private var aiQuotaView: some View {
         let active = telemetry.aiProviders.filter(\.enabled)
         if variant.w == 1, let first = active.first {
-            VStack(spacing: 4) {
-                AppleRingGauge(percent: Double(first.percent), size: 42, lineWidth: 4.0) {
-                    Text("\(first.percent)%").font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            VStack(spacing: 3) {
+                AppleRingGauge(percent: Double(first.percent), size: 36, lineWidth: 3.6) {
+                    Text("\(first.percent)%").font(.system(size: 9, weight: .bold, design: .monospaced))
                 }
-                Text(first.name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
+                Text(first.name).font(.system(size: 9.5, weight: .semibold)).lineLimit(1)
             }
-            .padding(8)
+            .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.aiDev) }
@@ -1390,13 +1397,13 @@ struct BentoWidgetTileView: View {
     @ViewBuilder private var devPortsView: some View {
         let ports = telemetry.devPorts
         if variant.w == 1 {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("监听端口").font(.system(size: 10, weight: .semibold)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
-                Spacer()
-                Text("\(ports.count)").font(.system(size: 20, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
-                Text("活跃 TCP").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("监听端口").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                Spacer(minLength: 0)
+                Text("\(ports.count)").font(.system(size: 17, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
+                Text("活跃 TCP").font(.system(size: 9)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
             }
-            .padding(11)
+            .padding(9)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.aiDev) }
@@ -1451,16 +1458,16 @@ struct BentoWidgetTileView: View {
         let events = syncHub.mergedEvents(for: todayKey)
         let nextEv = events.first
         if variant.w == 1 {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(nextEv?.origin.badgeText ?? "今日日程")
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(LiquidGlassPalette.sapphire)
                     .lineLimit(1)
-                Spacer()
-                Text(nextEv?.title ?? "暂无排期").font(.system(size: 11, weight: .semibold)).lineLimit(1)
-                Text(nextEv?.sortKey ?? "空闲").font(.system(size: 10, design: .monospaced)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                Spacer(minLength: 0)
+                Text(nextEv?.title ?? "暂无排期").font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
+                Text(nextEv?.sortKey ?? "空闲").font(.system(size: 9.5, design: .monospaced)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
             }
-            .padding(11)
+            .padding(9)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.calendar) }
@@ -1521,38 +1528,38 @@ struct BentoWidgetTileView: View {
         let doneCount = items.filter(\.done).count
         let pct = items.isEmpty ? 0.0 : (Double(doneCount) / Double(items.count) * 100.0)
         if variant.w == 1 {
-            VStack(spacing: 4) {
-                AppleRingGauge(percent: pct, size: 42, lineWidth: 4.0) {
-                    Text("\(doneCount)/\(items.count)").font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            VStack(spacing: 3) {
+                AppleRingGauge(percent: pct, size: 36, lineWidth: 3.6) {
+                    Text("\(doneCount)/\(items.count)").font(.system(size: 9, weight: .bold, design: .monospaced))
                 }
-                Text("待办清单").font(.system(size: 10, weight: .semibold))
+                Text("待办清单").font(.system(size: 9.5, weight: .semibold))
             }
-            .padding(8)
+            .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
             .onTapGesture { bentoStore.onNavigateModule?(.calendar) }
         } else {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text("随手待办 \(syncHub.appleRemindersEnabled ? "· 含提醒事项" : "· 仅岛内")")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                     Spacer()
-                    Text("\(doneCount)/\(items.count)").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
+                    Text("\(doneCount)/\(items.count)").font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(LiquidGlassPalette.sapphire)
                 }
                 if items.isEmpty {
-                    Spacer()
-                    Text("点击进入日程页新建待办").font(.system(size: 11)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
-                    Spacer()
+                    Spacer(minLength: 0)
+                    Text("点击进入日程页新建待办").font(.system(size: 10.5)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                    Spacer(minLength: 0)
                 } else {
                     ForEach(items.prefix(variant.h == 2 ? 4 : 2)) { item in
                         Button { syncHub.toggleTodo(item) } label: {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 5) {
                                 Image(systemName: item.done ? "checkmark.square.fill" : "square")
-                                    .font(.system(size: 11.5))
+                                    .font(.system(size: 10.5))
                                     .foregroundStyle(item.done ? LiquidGlassPalette.sapphire : LiquidGlassPalette.inkTertiary(scheme))
                                 Text(item.text)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 10.5, weight: .medium))
                                     .strikethrough(item.done)
                                     .opacity(item.done ? 0.55 : 1)
                                     .lineLimit(1)
@@ -1563,7 +1570,7 @@ struct BentoWidgetTileView: View {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(11)
+            .padding(.horizontal, 10).padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
         }
@@ -1575,13 +1582,13 @@ struct BentoWidgetTileView: View {
             Button {
                 if running { focusStore.pause() } else { focusStore.start(.focus) }
             } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Image(systemName: "timer").font(.system(size: 13, weight: .semibold)).foregroundStyle(running ? .white : LiquidGlassPalette.sapphire)
-                    Spacer()
-                    Text(focusStore.displayTime).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(running ? .white : LiquidGlassPalette.inkPrimary(scheme))
-                    Text(running ? "专注中" : "点按开始").font(.system(size: 9.5)).foregroundStyle(running ? .white.opacity(0.82) : LiquidGlassPalette.inkSecondary(scheme))
+                VStack(alignment: .leading, spacing: 2) {
+                    Image(systemName: "timer").font(.system(size: 12, weight: .semibold)).foregroundStyle(running ? .white : LiquidGlassPalette.sapphire)
+                    Spacer(minLength: 0)
+                    Text(focusStore.displayTime).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(running ? .white : LiquidGlassPalette.inkPrimary(scheme))
+                    Text(running ? "专注中" : "点按开始").font(.system(size: 9)).foregroundStyle(running ? .white.opacity(0.82) : LiquidGlassPalette.inkSecondary(scheme))
                 }
-                .padding(11).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(9).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
             .liquidGlassTile(active: running)
@@ -1614,12 +1621,12 @@ struct BentoWidgetTileView: View {
     @ViewBuilder private var musicView: some View {
         Button { bentoStore.onNavigateModule?(.music) } label: {
             if variant.w == 1 {
-                VStack(spacing: 5) {
-                    Circle().fill(Color(red: 0.08, green: 0.09, blue: 0.13)).frame(width: 40, height: 40)
-                        .overlay { Circle().fill(LiquidGlassPalette.sapphire).frame(width: 11, height: 11) }
-                    Text("音乐").font(.system(size: 10, weight: .semibold))
+                VStack(spacing: 3) {
+                    Circle().fill(Color(red: 0.08, green: 0.09, blue: 0.13)).frame(width: 34, height: 34)
+                        .overlay { Circle().fill(LiquidGlassPalette.sapphire).frame(width: 10, height: 10) }
+                    Text("音乐").font(.system(size: 9.5, weight: .semibold))
                 }
-                .padding(8).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HStack(spacing: 10) {
                     Circle().fill(Color(red: 0.08, green: 0.09, blue: 0.13)).frame(width: 38, height: 38)
@@ -1642,13 +1649,13 @@ struct BentoWidgetTileView: View {
         let count = bentoStore.shelfItemCountProvider?() ?? 0
         Button { bentoStore.onNavigateModule?(.shelf) } label: {
             if variant.w == 1 {
-                VStack(alignment: .leading, spacing: 4) {
-                    Image(systemName: "tray.full.fill").font(.system(size: 13)).foregroundStyle(LiquidGlassPalette.sapphire)
-                    Spacer()
-                    Text("\(count)").font(.system(size: 19, weight: .bold, design: .monospaced))
-                    Text("暂存文件").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                VStack(alignment: .leading, spacing: 2) {
+                    Image(systemName: "tray.full.fill").font(.system(size: 12)).foregroundStyle(LiquidGlassPalette.sapphire)
+                    Spacer(minLength: 0)
+                    Text("\(count)").font(.system(size: 16, weight: .bold, design: .monospaced))
+                    Text("暂存文件").font(.system(size: 9)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
                 }
-                .padding(11).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(9).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
