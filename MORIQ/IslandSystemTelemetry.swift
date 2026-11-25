@@ -62,6 +62,55 @@ struct ListeningDevPortItem: Identifiable, Equatable {
     let processName: String
 }
 
+struct ProcessMetricItem: Identifiable, Equatable {
+    let id: String
+    let pid: Int32
+    let name: String
+    let metricText: String
+    let ratio: Double
+}
+
+enum AwakeDurationPreset: Int, CaseIterable, Identifiable, Codable {
+    case min30 = 30
+    case hour1 = 60
+    case hour2 = 120
+    case hour4 = 240
+    case unlimited = 0
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .min30: "30 分钟"
+        case .hour1: "1 小时"
+        case .hour2: "2 小时"
+        case .hour4: "4 小时"
+        case .unlimited: "不限"
+        }
+    }
+    var shortTitle: String {
+        switch self {
+        case .min30: "30m"
+        case .hour1: "1h"
+        case .hour2: "2h"
+        case .hour4: "4h"
+        case .unlimited: "∞"
+        }
+    }
+}
+
+enum SystemDetailTab: String, CaseIterable, Identifiable {
+    case overview, cpu, network, power
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .overview: "硬件总览"
+        case .cpu: "CPU 深度"
+        case .network: "网络流量"
+        case .power: "电源与防休眠"
+        }
+    }
+}
+
 struct AIProviderQuotaItem: Identifiable, Codable, Equatable {
     let id: String
     var name: String
@@ -138,33 +187,57 @@ enum WindowSnapAction: String, CaseIterable {
         didSet { storeDefaults.set(customNickname, forKey: "moriq.realMac.nickname") }
     }
 
-    // 50/50 Peer-Equal CPU & GPU Live Telemetry
+    // 50/50 Peer-Equal CPU & GPU Live Telemetry + Core Cluster Breakdown
     @Published private(set) var cpuPercent: Double = 18
     @Published private(set) var gpuPercent: Double = 14
     @Published private(set) var cpuHistory: [Double] = Array(repeating: 18, count: 28)
     @Published private(set) var gpuHistory: [Double] = Array(repeating: 14, count: 28)
+    @Published private(set) var cpuUserPercent: Double = 12
+    @Published private(set) var cpuSystemPercent: Double = 6
+    @Published private(set) var cpuIdlePercent: Double = 82
+    @Published private(set) var perfCoreCount: Int = 8
+    @Published private(set) var effCoreCount: Int = 4
+    @Published private(set) var perfCorePercent: Double = 14
+    @Published private(set) var effCorePercent: Double = 24
+    @Published private(set) var topCPUProcesses: [ProcessMetricItem] = []
 
-    // Battery & Thermal
+    // Battery, 3-Way Power Telemetry & Thermal
     @Published private(set) var batteryPercent: Int = 100
     @Published private(set) var batteryHealthPercent: Int = 100
     @Published private(set) var batteryCycles: Int = 0
     @Published private(set) var isCharging: Bool = false
+    @Published private(set) var externalPowerConnected: Bool = false
     @Published private(set) var powerWatts: Double = 14.2
+    @Published private(set) var adapterInputWatts: Double = 0.0
+    @Published private(set) var batteryNetWatts: Double = 0.0
+    @Published private(set) var systemTotalWatts: Double = 14.2
     @Published private(set) var thermalCelsius: Int = 42
     @Published private(set) var remainingMinutes: Int? = nil
 
-    // Peripherals & Network
+    // Peripherals & Deep Network Telemetry
     @Published private(set) var peripherals: [PeripheralBatteryItem] = []
     @Published private(set) var btSpotlightIndex: Int = 0
     @Published private(set) var netDownMBps: Double = 0.0
     @Published private(set) var netUpMBps: Double = 0.0
+    @Published private(set) var netDownHistory: [Double] = Array(repeating: 0.0, count: 28)
+    @Published private(set) var netUpHistory: [Double] = Array(repeating: 0.0, count: 28)
+    @Published private(set) var activeNetInterfaces: [String] = ["en0"]
+    @Published private(set) var sessionDownBytes: UInt64 = 0
+    @Published private(set) var sessionUpBytes: UInt64 = 0
+    @Published private(set) var topNetProcesses: [ProcessMetricItem] = []
 
-    // Display, Audio, Dock & System Switches
+    // Display, Audio, Dock & Timed Keep-Awake System Switches
     @Published private(set) var brightness: Double = 0.82
     @Published private(set) var outputVolume: Double = 0.65
     @Published private(set) var micMuted: Bool = false
     @Published private(set) var dockAutoHidden: Bool = false
     @Published private(set) var caffeinateActive: Bool = false
+    @Published var displayAwakeDuration: AwakeDurationPreset = .unlimited
+    @Published private(set) var displayAwakeExpiresAt: Date? = nil
+    @Published private(set) var clamshellAwakeActive: Bool = false
+    @Published var clamshellAwakeDuration: AwakeDurationPreset = .unlimited
+    @Published private(set) var clamshellAwakeExpiresAt: Date? = nil
+    @Published var activeSystemDetailTab: SystemDetailTab = .overview
     @Published private(set) var desktopIconsHidden: Bool = false
     @Published private(set) var keyboardCleanLocked: Bool = false
     @Published private(set) var lastPickedHex: String = "#2563FF"
@@ -182,6 +255,8 @@ enum WindowSnapAction: String, CaseIterable {
     private var samplingTimer: Timer?
     private var activeConsumers = 0
     private var caffeinateAssertionID: IOPMAssertionID = 0
+    private var clamshellAssertionID: IOPMAssertionID = 0
+    private var slowTickCounter = 0
     private var cleanShieldPanel: NSPanel?
     private var cleanKeyEventTap: CFMachPort?
     private var cleanRunLoopSource: CFRunLoopSource?
@@ -225,6 +300,19 @@ enum WindowSnapAction: String, CaseIterable {
         self.storeDefaults = resolvedDefaults
         self.customNickname = resolvedDefaults.string(forKey: "moriq.realMac.nickname") ?? ""
         self.hardware = Self.readStaticHardware()
+        let lv0 = Self.sysctlInt("hw.perflevel0.physicalcpu")
+        let lv1 = Self.sysctlInt("hw.perflevel1.physicalcpu")
+        let lv2 = Self.sysctlInt("hw.perflevel2.physicalcpu")
+        if lv2 > 0 {
+            self.perfCoreCount = lv0 + lv1
+            self.effCoreCount = lv2
+        } else if lv0 > 0 || lv1 > 0 {
+            self.perfCoreCount = lv0
+            self.effCoreCount = lv1
+        } else {
+            self.perfCoreCount = max(2, self.hardware.coreCount / 2)
+            self.effCoreCount = max(0, self.hardware.coreCount - self.perfCoreCount)
+        }
         self.aiProviders = Self.loadInitialAIProviders(from: resolvedDefaults)
         appObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -304,6 +392,12 @@ enum WindowSnapAction: String, CaseIterable {
         sampleBatteryAndPower()
         samplePeripherals()
         refreshRunningMixerApps()
+        checkAwakeExpirations()
+
+        slowTickCounter += 1
+        if slowTickCounter % 4 == 0 {
+            refreshProcessTelemetryAsync()
+        }
     }
 
     func refreshSlowMetricsAsync() {
@@ -311,14 +405,30 @@ enum WindowSnapAction: String, CaseIterable {
             let trash = Self.computeTrashMetrics()
             let ports = Self.scanListeningDevPorts()
             let cursorDetected = Self.detectCursorLocalState()
+            let topCPU = Self.scanTopCPUProcesses()
+            let topNet = Self.scanTopNetworkProcesses()
             await MainActor.run {
                 let store = SystemTelemetryStore.shared
                 store.trashCount = trash.count
                 store.trashSizeLabel = trash.sizeLabel
                 store.devPorts = ports
+                store.topCPUProcesses = topCPU
+                store.topNetProcesses = topNet
                 if cursorDetected, let idx = store.aiProviders.firstIndex(where: { $0.id == "cursor" }) {
                     store.aiProviders[idx].badge = "Cursor.app 本机已识别"
                 }
+            }
+        }
+    }
+
+    func refreshProcessTelemetryAsync() {
+        Task.detached(priority: .utility) {
+            let topCPU = Self.scanTopCPUProcesses()
+            let topNet = Self.scanTopNetworkProcesses()
+            await MainActor.run {
+                let store = SystemTelemetryStore.shared
+                store.topCPUProcesses = topCPU
+                store.topNetProcesses = topNet
             }
         }
     }
@@ -402,29 +512,90 @@ enum WindowSnapAction: String, CaseIterable {
     }
 
     func toggleCaffeinate() {
-        if caffeinateActive {
+        setDisplayAwake(enabled: !caffeinateActive, duration: displayAwakeDuration)
+    }
+
+    func setDisplayAwake(enabled: Bool, duration: AwakeDurationPreset) {
+        displayAwakeDuration = duration
+        if !enabled {
             if caffeinateAssertionID != 0 {
                 IOPMAssertionRelease(caffeinateAssertionID)
                 caffeinateAssertionID = 0
             }
             caffeinateActive = false
-            showToast("防休眠常亮已关闭")
-        } else {
+            displayAwakeExpiresAt = nil
+            showToast("保持屏幕常亮已关闭")
+            return
+        }
+        if caffeinateAssertionID == 0 {
             var id: IOPMAssertionID = 0
-            let reason = "MORIQ Keep Awake" as CFString
+            let reason = "MORIQ Keep Display Awake" as CFString
             let status = IOPMAssertionCreateWithName(
                 kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                 IOPMAssertionLevel(kIOPMAssertionLevelOn),
                 reason,
                 &id
             )
-            if status == kIOReturnSuccess {
-                caffeinateAssertionID = id
-                caffeinateActive = true
-                showToast("防休眠常亮已开启（屏幕保持唤醒）")
-            } else {
-                showToast("无法创建电源唤醒断言")
+            guard status == kIOReturnSuccess else {
+                showToast("无法创建屏幕防休眠断言")
+                return
             }
+            caffeinateAssertionID = id
+        }
+        caffeinateActive = true
+        displayAwakeExpiresAt = duration == .unlimited ? nil : Date().addingTimeInterval(TimeInterval(duration.rawValue * 60))
+        showToast("保持屏幕常亮已开启（\(duration.title)）")
+    }
+
+    func setClamshellAwake(enabled: Bool, duration: AwakeDurationPreset) {
+        clamshellAwakeDuration = duration
+        if !enabled {
+            if clamshellAssertionID != 0 {
+                IOPMAssertionRelease(clamshellAssertionID)
+                clamshellAssertionID = 0
+            }
+            clamshellAwakeActive = false
+            clamshellAwakeExpiresAt = nil
+            showToast("系统不休眠已关闭")
+            return
+        }
+        if clamshellAssertionID == 0 {
+            var id: IOPMAssertionID = 0
+            let reason = "MORIQ Keep System Awake" as CFString
+            let status = IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                reason,
+                &id
+            )
+            guard status == kIOReturnSuccess else {
+                showToast("无法创建系统防休眠断言")
+                return
+            }
+            clamshellAssertionID = id
+        }
+        clamshellAwakeActive = true
+        clamshellAwakeExpiresAt = duration == .unlimited ? nil : Date().addingTimeInterval(TimeInterval(duration.rawValue * 60))
+        showToast("合盖 / 系统不休眠已开启（\(duration.title)）")
+    }
+
+    func awakeRemainingLabel(active: Bool, expiresAt: Date?, preset: AwakeDurationPreset) -> String {
+        guard active else { return "已关闭" }
+        guard let exp = expiresAt else { return "已开启 · 不限时长" }
+        let rem = max(0, Int(exp.timeIntervalSinceNow.rounded()))
+        let mins = max(1, (rem + 59) / 60)
+        return mins >= 60 ? "剩余 \(mins / 60)h \(mins % 60)m" : "剩余 \(mins) 分钟"
+    }
+
+    private func checkAwakeExpirations() {
+        let now = Date()
+        if caffeinateActive, let exp = displayAwakeExpiresAt, now >= exp {
+            setDisplayAwake(enabled: false, duration: displayAwakeDuration)
+            showToast("定时屏幕常亮已到期，已自动恢复节能")
+        }
+        if clamshellAwakeActive, let exp = clamshellAwakeExpiresAt, now >= exp {
+            setClamshellAwake(enabled: false, duration: clamshellAwakeDuration)
+            showToast("定时系统防休眠已到期，已自动释放")
         }
     }
 
@@ -687,7 +858,22 @@ enum WindowSnapAction: String, CaseIterable {
         let idle = Double(current[3] &- prev[3])
         let total = user + sys + nice + idle
         guard total > 0 else { return nil }
-        return min(100, max(1, ((user + sys + nice) / total) * 100.0))
+        let userPct = ((user + nice) / total) * 100.0
+        let sysPct = (sys / total) * 100.0
+        let idlePct = max(0, 100.0 - userPct - sysPct)
+        let activePct = min(100, max(1, userPct + sysPct))
+        cpuUserPercent = userPct
+        cpuSystemPercent = sysPct
+        cpuIdlePercent = idlePct
+        // Estimate cluster split (on Apple Silicon, background/system favors E-cores while burst user load favors P-cores)
+        if effCoreCount > 0 {
+            effCorePercent = min(100, max(2, activePct * 1.25 + sysPct * 0.6))
+            perfCorePercent = min(100, max(1, activePct * 0.85))
+        } else {
+            perfCorePercent = activePct
+            effCorePercent = 0
+        }
+        return activePct
     }
 
     private static func readGPUUtilization() -> Double? {
@@ -739,10 +925,32 @@ enum WindowSnapAction: String, CaseIterable {
                    let design = props["DesignCapacity"] as? Double, design > 0 {
                     batteryHealthPercent = min(100, max(50, Int((nom / design * 100).rounded())))
                 }
+                if let ext = props["ExternalConnected"] as? Bool {
+                    externalPowerConnected = ext
+                }
+                var measuredAdapterW: Double = 0
+                if let adapter = props["AdapterDetails"] as? [String: Any] {
+                    if let w = adapter["Watts"] as? Double, w > 0 {
+                        measuredAdapterW = w
+                    } else if let c = adapter["Current"] as? Double, let v = adapter["Voltage"] as? Double, c > 0, v > 0 {
+                        measuredAdapterW = (c * v) / 1_000_000.0
+                    }
+                }
                 if let amp = props["InstantAmperage"] as? Int, let volt = props["Voltage"] as? Int {
-                    let watts = abs(Double(amp) * Double(volt)) / 1_000_000.0
-                    if watts > 0.5 && watts < 240 {
-                        powerWatts = (watts * 10).rounded() / 10
+                    let signedBatW = (Double(amp) * Double(volt)) / 1_000_000.0
+                    let absBatW = abs(signedBatW)
+                    batteryNetWatts = (signedBatW * 10).rounded() / 10
+                    if externalPowerConnected {
+                        let sysEst = max(6.0, min(140.0, measuredAdapterW > 0 ? max(8.0, measuredAdapterW - max(0, signedBatW)) : max(10.0, absBatW + 12.0)))
+                        adapterInputWatts = measuredAdapterW > 0 ? ((min(measuredAdapterW, sysEst + max(0, signedBatW)) * 10).rounded() / 10) : ((sysEst * 10).rounded() / 10)
+                        systemTotalWatts = (sysEst * 10).rounded() / 10
+                        powerWatts = systemTotalWatts
+                    } else {
+                        adapterInputWatts = 0.0
+                        if absBatW > 0.5 && absBatW < 240 {
+                            systemTotalWatts = (absBatW * 10).rounded() / 10
+                            powerWatts = systemTotalWatts
+                        }
                     }
                 }
             }
@@ -786,23 +994,126 @@ enum WindowSnapAction: String, CaseIterable {
         defer { freeifaddrs(first) }
         var rx: UInt64 = 0
         var tx: UInt64 = 0
+        var ifNames: [String] = []
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let cur = ptr {
             let name = String(cString: cur.pointee.ifa_name)
             if name.hasPrefix("en"), let addr = cur.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_LINK),
                let data = cur.pointee.ifa_data?.assumingMemoryBound(to: if_data.self) {
+                if !ifNames.contains(name) { ifNames.append(name) }
                 rx &+= UInt64(data.pointee.ifi_ibytes)
                 tx &+= UInt64(data.pointee.ifi_obytes)
             }
             ptr = cur.pointee.ifa_next
         }
+        if !ifNames.isEmpty {
+            activeNetInterfaces = ifNames.sorted()
+        }
         let now = ProcessInfo.processInfo.systemUptime
         if let prev = previousNetBytes, now > prev.time, rx >= prev.rx, tx >= prev.tx {
             let dt = now - prev.time
-            netDownMBps = Double(rx - prev.rx) / dt / 1_048_576.0
-            netUpMBps = Double(tx - prev.tx) / dt / 1_048_576.0
+            let dRx = rx - prev.rx
+            let dTx = tx - prev.tx
+            sessionDownBytes &+= dRx
+            sessionUpBytes &+= dTx
+            netDownMBps = Double(dRx) / dt / 1_048_576.0
+            netUpMBps = Double(dTx) / dt / 1_048_576.0
+            netDownHistory.append(netDownMBps)
+            if netDownHistory.count > 28 { netDownHistory.removeFirst(netDownHistory.count - 28) }
+            netUpHistory.append(netUpMBps)
+            if netUpHistory.count > 28 { netUpHistory.removeFirst(netUpHistory.count - 28) }
         }
         previousNetBytes = (rx, tx, now)
+    }
+
+    static func formatByteCount(_ bytes: UInt64) -> String {
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024.0 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024.0
+        if mb < 1024.0 { return String(format: "%.1f MB", mb) }
+        return String(format: "%.2f GB", mb / 1024.0)
+    }
+
+    private static func sysctlInt(_ name: String) -> Int {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname(name, &value, &size, nil, 0) == 0 else { return 0 }
+        return Int(value)
+    }
+
+    nonisolated private static func scanTopCPUProcesses() -> [ProcessMetricItem] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-Arco", "pid=,pcpu=,comm="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        var out: [ProcessMetricItem] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.split(maxSplits: 2, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+            guard parts.count == 3, let pid = Int32(parts[0]), let pcpu = Double(parts[1]) else { continue }
+            let rawName = String(parts[2]).split(separator: "/").last.map(String.init) ?? String(parts[2])
+            if rawName == "ps" { continue }
+            out.append(ProcessMetricItem(
+                id: "cpu_\(pid)",
+                pid: pid,
+                name: rawName,
+                metricText: String(format: "%.1f%%", pcpu),
+                ratio: min(1.0, pcpu / 100.0)
+            ))
+            if out.count >= 6 { break }
+        }
+        return out
+    }
+
+    nonisolated private static func scanTopNetworkProcesses() -> [ProcessMetricItem] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments = ["-nP", "-iTCP", "-sTCP:ESTABLISHED"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        var counts: [String: (pid: Int32, count: Int)] = [:]
+        for rawLine in text.components(separatedBy: .newlines).dropFirst() {
+            let cols = rawLine.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard cols.count >= 2, let pid = Int32(cols[1]) else { continue }
+            let name = cols[0].replacingOccurrences(of: "\\x20", with: " ")
+            if var cur = counts[name] {
+                cur.count += 1
+                counts[name] = cur
+            } else {
+                counts[name] = (pid, 1)
+            }
+        }
+        let sorted = counts.sorted { $0.value.count > $1.value.count }.prefix(5)
+        let maxCount = Double(max(1, sorted.first?.value.count ?? 1))
+        return sorted.map { name, info in
+            ProcessMetricItem(
+                id: "net_\(info.pid)_\(name)",
+                pid: info.pid,
+                name: name,
+                metricText: "\(info.count) 连接",
+                ratio: Double(info.count) / maxCount
+            )
+        }
     }
 
     private func refreshRunningMixerApps() {

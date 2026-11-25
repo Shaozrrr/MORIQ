@@ -656,8 +656,8 @@ struct BentoWidgetTileView: View {
                     on: telemetry.caffeinateActive,
                     symbol: "cup.and.saucer.fill",
                     title: "防休眠常亮",
-                    subtitle: telemetry.caffeinateActive ? "屏幕保持唤醒" : "点击开启常亮",
-                    badge: telemetry.caffeinateActive ? "开启" : "默认"
+                    subtitle: telemetry.caffeinateActive ? telemetry.awakeRemainingLabel(active: true, expiresAt: telemetry.displayAwakeExpiresAt, preset: telemetry.displayAwakeDuration) : "点击开启常亮",
+                    badge: telemetry.caffeinateActive ? telemetry.displayAwakeDuration.shortTitle : "默认"
                 ) { if !previewOnly { telemetry.toggleCaffeinate() } }
             case .cleanKeyboard:
                 switchTile(
@@ -1044,6 +1044,10 @@ struct BentoWidgetTileView: View {
             .padding(.horizontal, 11).padding(.vertical, 9)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile(cornerRadius: variant.h == 2 ? 20 : 18)
+            .onTapGesture {
+                telemetry.activeSystemDetailTab = .power
+                bentoStore.onNavigateModule?(.system)
+            }
         }
     }
 
@@ -1141,6 +1145,10 @@ struct BentoWidgetTileView: View {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .liquidGlassTile()
+            .onTapGesture {
+                telemetry.activeSystemDetailTab = .network
+                bentoStore.onNavigateModule?(.system)
+            }
         }
     }
 

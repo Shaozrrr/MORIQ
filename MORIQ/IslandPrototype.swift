@@ -231,7 +231,9 @@ final class IslandPanel: NSPanel {
             height = min(visible.height - 40, gridH + 78)
         case .calendar:
             height = min(visible.height - 40, 356)
-        case .system, .control, .toolkit:
+        case .system:
+            height = min(visible.height - 40, 294)
+        case .control, .toolkit:
             height = min(visible.height - 40, 242)
         case .aiDev:
             height = min(visible.height - 40, 260)
@@ -565,17 +567,9 @@ private struct IslandPrototypeView: View {
                     .padding(.vertical, 10)
 
             case .system:
-                VStack(spacing: 8) {
-                    BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .realMac, variantKey: "banner_4x1"))
-                        .frame(height: 78)
-                    HStack(spacing: 8) {
-                        BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"))
-                        BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .bluetooth, variantKey: "rings_2x1"))
-                    }
-                    .frame(height: 78)
-                }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
+                SystemDeepTelemetryStageView(telemetry: telemetry)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
 
             case .control:
                 VStack(spacing: 8) {
@@ -783,4 +777,522 @@ private struct IslandLiquidTabStyle: ButtonStyle {
             select: { _ in }
         )
     )
+}
+
+/// Original MORIQ Liquid Glass 4-Tab Deep Hardware & Power Stage
+struct SystemDeepTelemetryStageView: View {
+    @ObservedObject var telemetry: SystemTelemetryStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    ForEach(SystemDetailTab.allCases) { tab in
+                        let selected = telemetry.activeSystemDetailTab == tab
+                        Button {
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                telemetry.activeSystemDetailTab = tab
+                            }
+                            if tab == .cpu || tab == .network {
+                                telemetry.refreshProcessTelemetryAsync()
+                            }
+                        } label: {
+                            Text(tab.title)
+                                .font(.system(size: 10.5, weight: selected ? .semibold : .medium))
+                                .foregroundStyle(selected ? LiquidGlassPalette.inkPrimary(scheme) : LiquidGlassPalette.inkSecondary(scheme))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 3.5)
+                                .background(selected ? Color.white.opacity(scheme == .dark ? 0.16 : 0.94) : .clear, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(2)
+                .liquidGlassWell(cornerRadius: 13)
+
+                Spacer()
+
+                HStack(spacing: 5) {
+                    Text("\(telemetry.thermalCelsius)°C")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(LiquidGlassPalette.sapphire)
+                    Text("·").opacity(0.35)
+                    Text(String(format: "%.1fW", telemetry.systemTotalWatts))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .liquidGlassPill()
+            }
+
+            switch telemetry.activeSystemDetailTab {
+            case .overview:
+                VStack(spacing: 8) {
+                    BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .realMac, variantKey: "banner_4x1"))
+                        .frame(height: 76)
+                    HStack(spacing: 8) {
+                        BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .cpuGpu, variantKey: "wave_2x1"))
+                            .onTapGesture { telemetry.activeSystemDetailTab = .cpu }
+                        BentoWidgetTileView(entry: BentoCanvasEntry(widgetID: .bluetooth, variantKey: "rings_2x1"))
+                    }
+                    .frame(height: 76)
+                }
+
+            case .cpu:
+                cpuDeepView
+
+            case .network:
+                networkDeepView
+
+            case .power:
+                powerAndAwakeView
+            }
+        }
+    }
+
+    private var cpuDeepView: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("总负载").font(.system(size: 10, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                    Text("\(Int(telemetry.cpuPercent.rounded()))%")
+                        .font(.system(size: 17, weight: .bold, design: .monospaced))
+                        .foregroundStyle(LiquidGlassPalette.sapphire)
+                    Spacer()
+                    Text("\(telemetry.perfCoreCount)P + \(telemetry.effCoreCount)E · \(telemetry.hardware.coreCount)核")
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                }
+
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("性能核 P").font(.system(size: 9.5, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                            Spacer()
+                            Text("\(telemetry.perfCoreCount)核").font(.system(size: 9, design: .monospaced)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                        }
+                        Text("\(Int(telemetry.perfCorePercent.rounded()))%")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .liquidGlassWell(cornerRadius: 10)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("能效核 E").font(.system(size: 9.5, weight: .medium)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                            Spacer()
+                            Text("\(telemetry.effCoreCount)核").font(.system(size: 9, design: .monospaced)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                        }
+                        Text("\(Int(telemetry.effCorePercent.rounded()))%")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .liquidGlassWell(cornerRadius: 10)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    MultiSegmentTelemetryBar(
+                        primaryFraction: telemetry.cpuUserPercent / 100.0,
+                        secondaryFraction: telemetry.cpuSystemPercent / 100.0,
+                        primaryColor: LiquidGlassPalette.sapphire,
+                        secondaryColor: LiquidGlassPalette.cpuStroke(scheme)
+                    )
+                    HStack {
+                        Text("用户 \(Int(telemetry.cpuUserPercent.rounded()))%").foregroundStyle(LiquidGlassPalette.sapphire)
+                        Spacer()
+                        Text("系统 \(Int(telemetry.cpuSystemPercent.rounded()))%").foregroundStyle(LiquidGlassPalette.inkPrimary(scheme))
+                        Spacer()
+                        Text("空闲 \(Int(telemetry.cpuIdlePercent.rounded()))%").foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                    }
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                }
+
+                SparklineWaveformView(
+                    primary: telemetry.cpuHistory,
+                    secondary: nil,
+                    primaryColor: LiquidGlassPalette.sapphire,
+                    secondaryColor: .clear
+                )
+                .frame(height: 36)
+                .liquidGlassWell(cornerRadius: 10)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .liquidGlassTile(cornerRadius: 16)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("高占用应用").font(.system(size: 10.5, weight: .semibold))
+                    Spacer()
+                    Button { telemetry.refreshProcessTelemetryAsync() } label: {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 9.5))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(LiquidGlassPalette.sapphire)
+                }
+                if telemetry.topCPUProcesses.isEmpty {
+                    Spacer()
+                    Text("正在采集进程负载…").font(.system(size: 10)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                    Spacer()
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(telemetry.topCPUProcesses.prefix(5)) { item in
+                            HStack(spacing: 6) {
+                                ProcessAppIconView(pid: item.pid)
+                                Text(item.name)
+                                    .font(.system(size: 10.5, weight: .medium))
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(item.metricText)
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(item.ratio > 0.35 ? LiquidGlassPalette.sapphire : LiquidGlassPalette.inkSecondary(scheme))
+                            }
+                            .padding(.horizontal, 7).padding(.vertical, 3.5)
+                            .liquidGlassWell(cornerRadius: 8)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(10)
+            .frame(width: 220)
+            .frame(maxHeight: .infinity)
+            .liquidGlassTile(cornerRadius: 16)
+        }
+        .frame(height: 186)
+    }
+
+    private var networkDeepView: some View {
+        let downTxt = telemetry.netDownMBps >= 1.0 ? String(format: "%.1f MB/s", telemetry.netDownMBps) : String(format: "%.0f KB/s", telemetry.netDownMBps * 1024)
+        let upTxt = telemetry.netUpMBps >= 1.0 ? String(format: "%.1f MB/s", telemetry.netUpMBps) : String(format: "%.0f KB/s", telemetry.netUpMBps * 1024)
+
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("实时下载").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        Text("↓ \(downTxt)")
+                            .font(.system(size: 13.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .liquidGlassWell(cornerRadius: 10)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("实时上传").font(.system(size: 9.5)).foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        Text("↑ \(upTxt)")
+                            .font(.system(size: 13.5, weight: .bold, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .liquidGlassWell(cornerRadius: 10)
+                }
+
+                SparklineWaveformView(
+                    primary: telemetry.netDownHistory,
+                    secondary: telemetry.netUpHistory,
+                    primaryColor: LiquidGlassPalette.sapphire,
+                    secondaryColor: LiquidGlassPalette.cpuStroke(scheme).opacity(0.65)
+                )
+                .frame(height: 46)
+                .liquidGlassWell(cornerRadius: 10)
+
+                VStack(spacing: 3) {
+                    HStack {
+                        Text("活跃网卡").foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        Spacer()
+                        Text(telemetry.activeNetInterfaces.prefix(5).joined(separator: ", "))
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    HStack {
+                        Text("本次会话累计").foregroundStyle(LiquidGlassPalette.inkSecondary(scheme))
+                        Spacer()
+                        Text("↓ \(SystemTelemetryStore.formatByteCount(telemetry.sessionDownBytes))  ·  ↑ \(SystemTelemetryStore.formatByteCount(telemetry.sessionUpBytes))")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
+                    }
+                }
+                .font(.system(size: 10))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .liquidGlassTile(cornerRadius: 16)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("活跃网络应用").font(.system(size: 10.5, weight: .semibold))
+                    Spacer()
+                    Button { telemetry.refreshProcessTelemetryAsync() } label: {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 9.5))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(LiquidGlassPalette.sapphire)
+                }
+                if telemetry.topNetProcesses.isEmpty {
+                    Spacer()
+                    Text("当前无活跃 TCP 外联进程").font(.system(size: 10)).foregroundStyle(LiquidGlassPalette.inkTertiary(scheme))
+                    Spacer()
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(telemetry.topNetProcesses.prefix(5)) { item in
+                            HStack(spacing: 6) {
+                                ProcessAppIconView(pid: item.pid)
+                                Text(item.name).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(item.metricText)
+                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(LiquidGlassPalette.sapphire)
+                            }
+                            .padding(.horizontal, 7).padding(.vertical, 3.5)
+                            .liquidGlassWell(cornerRadius: 8)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(10)
+            .frame(width: 210)
+            .frame(maxHeight: .infinity)
+            .liquidGlassTile(cornerRadius: 16)
+        }
+        .frame(height: 186)
+    }
+
+    private var powerAndAwakeView: some View {
+        let batStateLabel: String = {
+            if telemetry.isCharging { return "充电中" }
+            if telemetry.externalPowerConnected { return "电源直供" }
+            return "电池放电"
+        }()
+
+        return VStack(spacing: 8) {
+            HStack(spacing: 7) {
+                powerMetricPod(
+                    symbol: "powerplug.fill",
+                    title: "适配器输入",
+                    value: String(format: "%.1f W", telemetry.adapterInputWatts),
+                    caption: telemetry.externalPowerConnected ? "已接通外接电源" : "未接电源",
+                    accent: false
+                )
+                powerMetricPod(
+                    symbol: telemetry.isCharging ? "battery.100percent.bolt" : "battery.75percent",
+                    title: "电池 \(telemetry.batteryPercent)%",
+                    value: String(format: "%.1f W", abs(telemetry.batteryNetWatts)),
+                    caption: "\(batStateLabel) · 健康 \(telemetry.batteryHealthPercent)%",
+                    accent: false
+                )
+                powerMetricPod(
+                    symbol: "laptopcomputer",
+                    title: "整机系统功耗",
+                    value: String(format: "%.1f W", telemetry.systemTotalWatts),
+                    caption: "循环 \(telemetry.batteryCycles) 次 · \(telemetry.thermalCelsius)°C",
+                    accent: true
+                )
+            }
+            .frame(height: 68)
+
+            VStack(spacing: 6) {
+                timedAwakeRow(
+                    symbol: "sun.max.fill",
+                    title: "保持屏幕常亮",
+                    status: telemetry.awakeRemainingLabel(active: telemetry.caffeinateActive, expiresAt: telemetry.displayAwakeExpiresAt, preset: telemetry.displayAwakeDuration),
+                    active: telemetry.caffeinateActive,
+                    selectedPreset: telemetry.displayAwakeDuration,
+                    onToggle: {
+                        telemetry.setDisplayAwake(enabled: !telemetry.caffeinateActive, duration: telemetry.displayAwakeDuration)
+                    },
+                    onSelectPreset: { preset in
+                        telemetry.setDisplayAwake(enabled: true, duration: preset)
+                    }
+                )
+                timedAwakeRow(
+                    symbol: "moon.zzz.fill",
+                    title: "合盖 / 系统不休眠",
+                    status: telemetry.awakeRemainingLabel(active: telemetry.clamshellAwakeActive, expiresAt: telemetry.clamshellAwakeExpiresAt, preset: telemetry.clamshellAwakeDuration),
+                    active: telemetry.clamshellAwakeActive,
+                    selectedPreset: telemetry.clamshellAwakeDuration,
+                    onToggle: {
+                        telemetry.setClamshellAwake(enabled: !telemetry.clamshellAwakeActive, duration: telemetry.clamshellAwakeDuration)
+                    },
+                    onSelectPreset: { preset in
+                        telemetry.setClamshellAwake(enabled: true, duration: preset)
+                    }
+                )
+            }
+        }
+        .frame(height: 186)
+    }
+
+    private func powerMetricPod(symbol: String, title: String, value: String, caption: String, accent: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(accent ? .white : LiquidGlassPalette.sapphire)
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(accent ? .white.opacity(0.90) : LiquidGlassPalette.inkSecondary(scheme))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Text(value)
+                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .foregroundStyle(accent ? .white : LiquidGlassPalette.inkPrimary(scheme))
+            Text(caption)
+                .font(.system(size: 9))
+                .foregroundStyle(accent ? .white.opacity(0.78) : LiquidGlassPalette.inkTertiary(scheme))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .liquidGlassTile(cornerRadius: 15, active: accent)
+    }
+
+    private func timedAwakeRow(
+        symbol: String,
+        title: String,
+        status: String,
+        active: Bool,
+        selectedPreset: AwakeDurationPreset,
+        onToggle: @escaping () -> Void,
+        onSelectPreset: @escaping (AwakeDurationPreset) -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button(action: onToggle) {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(active ? LiquidGlassPalette.sapphire : LiquidGlassPalette.sapphireSoft(scheme))
+                        .frame(width: 28, height: 28)
+                        .overlay {
+                            Image(systemName: symbol)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(active ? .white : LiquidGlassPalette.sapphire)
+                        }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.system(size: 11.5, weight: .semibold))
+                        Text(status)
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(active ? LiquidGlassPalette.sapphire : LiquidGlassPalette.inkTertiary(scheme))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 4)
+
+            HStack(spacing: 3) {
+                ForEach(AwakeDurationPreset.allCases) { preset in
+                    let isChosen = active && selectedPreset == preset
+                    Button {
+                        onSelectPreset(preset)
+                    } label: {
+                        Text(preset.shortTitle)
+                            .font(.system(size: 9.5, weight: isChosen ? .bold : .medium, design: .monospaced))
+                            .foregroundStyle(isChosen ? .white : LiquidGlassPalette.inkSecondary(scheme))
+                            .padding(.horizontal, 6.5).padding(.vertical, 3)
+                            .background(isChosen ? LiquidGlassPalette.sapphire : Color.clear, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(2)
+            .liquidGlassWell(cornerRadius: 12)
+
+            Toggle("", isOn: Binding(get: { active }, set: { _ in onToggle() }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .liquidGlassTile(cornerRadius: 14)
+    }
+}
+
+private struct ProcessAppIconView: View {
+    let pid: Int32
+    var body: some View {
+        if let icon = NSRunningApplication(processIdentifier: pid)?.icon {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 14, height: 14)
+                .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+        } else {
+            Image(systemName: "app.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(LiquidGlassPalette.sapphire)
+                .frame(width: 14, height: 14)
+        }
+    }
+}
+
+private struct SparklineWaveformView: View {
+    let primary: [Double]
+    let secondary: [Double]?
+    let primaryColor: Color
+    let secondaryColor: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let allVals = primary + (secondary ?? [])
+            let maxVal = max(1.0, (allVals.max() ?? 1.0) * 1.15)
+            ZStack {
+                if let sec = secondary, sec.count > 1 {
+                    waveformPath(sec, size: geo.size, maxVal: maxVal, closeArea: false)
+                        .stroke(secondaryColor, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+                }
+                if primary.count > 1 {
+                    waveformPath(primary, size: geo.size, maxVal: maxVal, closeArea: true)
+                        .fill(
+                            LinearGradient(
+                                colors: [primaryColor.opacity(0.24), primaryColor.opacity(0.01)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    waveformPath(primary, size: geo.size, maxVal: maxVal, closeArea: false)
+                        .stroke(primaryColor, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func waveformPath(_ data: [Double], size: CGSize, maxVal: Double, closeArea: Bool) -> Path {
+        var path = Path()
+        let w = max(1, size.width - 8)
+        let h = max(1, size.height - 8)
+        let stepX = w / CGFloat(max(1, data.count - 1))
+        for (i, val) in data.enumerated() {
+            let x = CGFloat(i) * stepX
+            let norm = min(1.0, max(0.0, val / maxVal))
+            let y = h - CGFloat(norm) * h
+            if i == 0 {
+                if closeArea {
+                    path.move(to: CGPoint(x: 0, y: h))
+                    path.addLine(to: CGPoint(x: x, y: y))
+                } else {
+                    path.move(to: CGPoint(x: x, y: y))
+                }
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        if closeArea {
+            path.addLine(to: CGPoint(x: w, y: h))
+            path.closeSubpath()
+        }
+        return path
+    }
 }
