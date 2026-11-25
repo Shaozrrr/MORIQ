@@ -43,30 +43,31 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 ### 屏幕顶端，留给手边的事
 
-**灵动岛** · 在设置中选好要看的内容。鼠标移到屏幕顶端，即可查看日程、专注计时、音乐和正在使用的工具结果。
+**灵动岛** · 采用原生液态玻璃设计。支持在设置中自由定制 8 / 12 / 16 格 Bento 画布、多尺寸实时组件样式、最多 8 个顶栏 Tab 与收起态小胶囊实时拼装；日程、待办与便签支持可选连接 macOS 本地日历、Google 日历、提醒事项与备忘录，并存合并且不覆盖岛内已有内容。
 
 ## 安装与使用
 
-MORIQ 面向 **macOS 15 或更高版本**，请选择与你的 Mac 芯片对应的版本：
+MORIQ 面向 **macOS 15 或更高版本**，请选择与你的 Mac 芯片对应的内测版：
 
-[下载 Apple 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Intel.dmg)
+[下载 Apple 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta35/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta35/MORIQ-Intel.dmg)
 
 打开下载的 DMG，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
 
-首次使用时，应用会引导你了解所需权限。截图、系统音频字幕和部分桌面交互分别需要相应的 macOS 权限；具体说明会在应用内提供。
+首次使用时，应用会引导你了解所需权限。截图、系统音频字幕、日历/提醒事项同步和部分桌面交互分别需要相应的 macOS 权限；具体说明会在应用内提供。
 
-快捷键可在应用设置中调整，浅色与深色外观也可按喜好切换。
+快捷键可在应用设置中调整，浅色玻璃与深色曜石外观也可一键切换。
 
 ## 当前进度
 
-MORIQ 仍处于内测阶段。安装包已通过 Apple 公证，支持 Apple 和 Intel 芯片；Intel 真机及其他 Mac 的安装体验尚待验证。
+MORIQ 仍处于内测阶段。Build 35 安装包已完成 Developer ID 签名与 Apple 公证附票，支持 Apple 和 Intel 芯片；Intel 真机及其他 Mac 的安装体验尚待验证。
 
 实时字幕的在线识别与翻译需要网络及可用的 MORIQ 服务，实际效果会随语言、网络和声音环境变化。
 
 <details>
 <summary>旧版下载</summary>
 
-[Apple 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Apple.dmg) · [Intel 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Intel.dmg)
+- Build 31：[Apple 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Apple.dmg) · [Intel 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta31/MORIQ-Intel.dmg)
+- 早期内测：[Apple 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Apple.dmg) · [Intel 芯片](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta/MORIQ-Intel.dmg)
 
 </details>
 
