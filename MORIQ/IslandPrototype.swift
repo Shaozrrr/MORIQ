@@ -73,6 +73,10 @@ final class IslandPanel: NSPanel {
             bentoStore.onNavigateModule = { [weak self] target in
                 guard let self else { return }
                 if !self.content.selection.enabled.contains(target) {
+                    if self.content.selection.enabled.count >= IslandModuleSelection.maxEnabledCount,
+                       let removable = self.content.selection.enabled.last(where: { $0 != .bento }) {
+                        self.content.setEnabled(removable, false)
+                    }
                     self.content.setEnabled(target, true)
                 }
                 self.content.select(target)
@@ -355,7 +359,7 @@ final class IslandPanel: NSPanel {
 @MainActor final class IslandPreviewContent: ObservableObject {
     static let shared = IslandPreviewContent(
         defaults: .standard,
-        defaultModules: [.bento, .calendar, .system, .control, .toolkit, .aiDev, .focus, .music, .shelf]
+        defaultModules: [.bento, .calendar, .system, .control, .toolkit, .aiDev, .focus, .music]
     )
 
     @Published private(set) var selection: IslandModuleSelection
@@ -465,10 +469,7 @@ private struct IslandPrototypeView: View {
                     HStack(spacing: isProductShell ? 2 : 0) {
                         ForEach(model.selection.enabled) { module in
                             let isSelected = model.selection.selected == module
-                            let showLabel = isProductShell && (
-                                bentoStore.tabLabelMode == .allLabels ||
-                                (bentoStore.tabLabelMode == .activeOnly && isSelected)
-                            )
+                            let showLabel = isProductShell && isSelected
                             Button {
                                 withAnimation(.spring(response: 0.26, dampingFraction: 0.84)) {
                                     model.select(module)

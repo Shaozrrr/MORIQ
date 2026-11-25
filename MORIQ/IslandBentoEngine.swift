@@ -2624,25 +2624,21 @@ struct IslandStudioSettingsView: View {
         }
     }
 
-    // 2. Top Tab Bar Customization
+    // 2. Top Tab Bar Customization (Max 8 Tabs, Always Active-Only Expanded Label)
     private var topTabsCustomizationView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("顶栏标签文字显示风格").font(.system(size: 12.5, weight: .semibold))
-                    Picker("标签显示风格", selection: $bentoStore.tabLabelMode) {
-                        ForEach(IslandTabLabelMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
+                    HStack {
+                        Text("启用模块与显示顺序").font(.system(size: 12.5, weight: .semibold))
+                        Spacer()
+                        Text("已选 \(tabModel.selection.enabled.count)/\(IslandModuleSelection.maxEnabledCount) 个（最多 \(IslandModuleSelection.maxEnabledCount) 个）")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(LiquidGlassPalette.sapphire)
                     }
-                    .pickerStyle(.segmented)
-                }
-                .padding(12)
-                .liquidGlassWell(cornerRadius: 14)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("启用模块与显示顺序").font(.system(size: 12.5, weight: .semibold))
                     ForEach(IslandModule.allCases) { module in
+                        let isEnabled = tabModel.selection.enabled.contains(module)
+                        let atCap = !isEnabled && tabModel.selection.enabled.count >= IslandModuleSelection.maxEnabledCount
                         HStack {
                             Image(systemName: module.islandSymbolName).frame(width: 20).foregroundStyle(LiquidGlassPalette.sapphire)
                             Text(module.title).font(.system(size: 12.5, weight: .medium))
@@ -2654,16 +2650,22 @@ struct IslandStudioSettingsView: View {
                                     .buttonStyle(.borderless).disabled(index == tabModel.selection.enabled.count - 1).accessibilityLabel("下移\(module.title)")
                             }
                             Toggle("", isOn: Binding(
-                                get: { tabModel.selection.enabled.contains(module) },
+                                get: { isEnabled },
                                 set: { enabled in
                                     if !enabled && tabModel.selection.enabled.count <= 1 { return }
+                                    if enabled && tabModel.selection.enabled.count >= IslandModuleSelection.maxEnabledCount {
+                                        telemetry.showToast("顶栏 Tab 最多启用 \(IslandModuleSelection.maxEnabledCount) 个，请先关闭一个")
+                                        return
+                                    }
                                     tabModel.setEnabled(module, enabled)
                                 }
                             ))
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                            .disabled(atCap)
                         }
+                        .opacity(atCap ? 0.55 : 1.0)
                         .padding(.vertical, 3)
                     }
                 }

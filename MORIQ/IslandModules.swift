@@ -48,17 +48,22 @@ enum IslandModule: String, Codable, CaseIterable, Identifiable {
 
 /// Only module choices are persisted; content stays owned by the existing features.
 struct IslandModuleSelection: Equatable {
+    static let maxEnabledCount = 8
+
     private(set) var enabled: [IslandModule]
     private(set) var selected: IslandModule?
 
     init(enabled: [IslandModule], selected: IslandModule? = nil) {
         var seen = Set<IslandModule>()
-        self.enabled = enabled.filter { seen.insert($0).inserted }
+        self.enabled = Array(enabled.filter { seen.insert($0).inserted }.prefix(Self.maxEnabledCount))
         self.selected = selected.flatMap { self.enabled.contains($0) ? $0 : nil } ?? self.enabled.first
     }
     mutating func setEnabled(_ module: IslandModule, _ value: Bool) {
         if value {
-            if !enabled.contains(module) { enabled.append(module) }
+            if !enabled.contains(module) {
+                guard enabled.count < Self.maxEnabledCount else { return }
+                enabled.append(module)
+            }
             if selected == nil { selected = module }
         } else {
             guard let index = enabled.firstIndex(of: module) else { return }
