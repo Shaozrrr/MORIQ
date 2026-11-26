@@ -53,7 +53,7 @@ MORIQ 把这些日常操作放回手边。拖一下、按一个快捷键，或�
 
 MORIQ 面向 **macOS 15 或更高版本**，请选择与你的 Mac 芯片对应的内测版：
 
-[下载 Apple 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta36/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Shaozrrr/MORIQ/releases/download/v0.1.0-macos-beta36/MORIQ-Intel.dmg)
+[下载 Apple 芯片 Mac 版](https://github.com/Zorro-Shao/MORIQ/releases/download/v0.1.0-macos-beta36/MORIQ-Apple.dmg) · [下载 Intel 芯片 Mac 版](https://github.com/Zorro-Shao/MORIQ/releases/download/v0.1.0-macos-beta36/MORIQ-Intel.dmg)
 
 打开下载的 DMG，将 MORIQ 拖入「应用程序」文件夹，再从应用程序中启动。
 
